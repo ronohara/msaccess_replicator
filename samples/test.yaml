@@ -1,0 +1,54 @@
+# replicatorconfig.yaml
+# Configuration for ODBC to PostgreSQL Database Replication System
+
+# Source DAO connection
+DAO:
+  driver: "Microsoft Access Driver (*.mdb, *.accdb)"
+  database: "Test.accdb"
+
+# Target PostgreSQL connection
+postgresql:
+  host: "localhost"
+  port: 5432
+  database: "test"
+  user: "replicator"
+  password: "xxxxxxxx"
+#  password: "wrongpwd"
+
+# Global settings
+global:
+  debug: false
+  managerid: "Replicator"
+  verbose: true
+
+# Tables to replicate (commented out - will auto-discover from database)
+#tables:
+#   - "DimKanal"
+#   - "FactSatis"
+
+excluded:
+  - "Events"
+
+# Primary keys for tables (optional - will auto-discover)
+# primarykeys:
+#   xxxxxs:
+#     - "customer_number"
+#   Visits:
+#     - "VisitID"
+
+# Transformations - MUST be a LIST of dictionaries
+#transformations:
+#  - table: "Dimindirim"
+#    columns:
+#      - name: "Baslangic"
+#        transform: "YearOnly"
+
+# Foreign keys (optional - will auto-discover)
+# foreignkeys:
+#   fk_patients_investigations:
+#     base_table: "DimCheck"
+#     reference_table: "Dimindirim"
+#     base_columns:
+#       - "Urunkod"
+#     reference_columns:
+#       - "Urunkod"
