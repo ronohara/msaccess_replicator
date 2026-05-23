@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__version__ = "$Revision: 1.19 $"
+__version__ = "$Revision: 1.20 $"
 
 import sys
 import os
@@ -337,31 +337,36 @@ class ReplicationManager:
     # PROGRESS INDICATION
     # ========================================================================
     
-    def show_progress(self, table_name, current, total, stage="Copying"):
+    def show_progress(self, table_name, current, total, stage="Copying", start_time=None):
+        """Show progress bar with ETA calculation based on start time."""
         if self.trace:
             frame = inspect.currentframe()
             logger.info(f"Line {frame.f_lineno} - show_progress called with params: table_name={table_name}, current={current}, total={total}, stage={stage}")
         
         current_time = time.time()
         
+        # Only update display at intervals or when complete
         if current_time - self.last_progress_time >= self.progress_interval or current == total:
             percentage = (current / total * 100) if total > 0 else 0
-            elapsed = current_time - self.last_progress_time if self.last_progress_time > 0 else 0
             
+            # Build progress bar
             bar_length = 40
             filled_length = int(bar_length * current // total) if total > 0 else 0
             bar = '█' * filled_length + '░' * (bar_length - filled_length)
             
+            # Calculate ETA using start_time if provided
             eta_str = ""
-            if current > 0 and elapsed > 0 and current < total:
-                rate = current / elapsed
-                remaining_seconds = (total - current) / rate if rate > 0 else 0
-                if remaining_seconds < 60:
-                    eta_str = f" ETA: {remaining_seconds:.0f}s"
-                elif remaining_seconds < 3600:
-                    eta_str = f" ETA: {remaining_seconds / 60:.1f}m"
-                else:
-                    eta_str = f" ETA: {remaining_seconds / 3600:.1f}h"
+            if start_time is not None and current > 0 and current < total:
+                elapsed_since_start = current_time - start_time
+                if elapsed_since_start > 0:
+                    rate = current / elapsed_since_start
+                    remaining_seconds = (total - current) / rate
+                    if remaining_seconds < 60:
+                        eta_str = f" ETA: {remaining_seconds:.0f}s"
+                    elif remaining_seconds < 3600:
+                        eta_str = f" ETA: {remaining_seconds / 60:.1f}m"
+                    else:
+                        eta_str = f" ETA: {remaining_seconds / 3600:.1f}h"
             
             log_message = f"{stage} {table_name}: [{bar}] {percentage:.1f}% ({current}/{total}){eta_str}"
             
@@ -703,6 +708,7 @@ class ReplicationManager:
         
         rows_processed = 0
         self.last_progress_time = time.time()
+        copy_start_time = time.time()  # Record start time for ETA calculation
         
         while not recordset.EOF:
             row_data = []
@@ -724,7 +730,7 @@ class ReplicationManager:
             
             rows_processed += 1
             stage = "Append" if not has_unique_constraint else "Sync"
-            self.show_progress(table_name, rows_processed, rows_to_copy, stage)
+            self.show_progress(table_name, rows_processed, rows_to_copy, stage, copy_start_time)
             
             # Insert the row if it has any columns
             if valid_columns:
@@ -736,7 +742,7 @@ class ReplicationManager:
         
         recordset.Close()
         
-        self.show_progress(table_name, rows_to_copy, rows_to_copy, stage)
+        self.show_progress(table_name, rows_to_copy, rows_to_copy, stage, copy_start_time)
         
         if rows_inserted > 0:
             if not has_unique_constraint:
@@ -1953,6 +1959,7 @@ class ReplicationManager:
         total_rows = len(pg_rows)
         rows_checked = 0
         last_progress_time = time.time()
+        check_start_time = time.time()  # Record start time for ETA calculation
         progress_interval = 2  # seconds (matches show_progress interval)
         
         print(f"      Checking {total_rows} rows from PostgreSQL...")
@@ -2022,30 +2029,30 @@ class ReplicationManager:
                 logger.warning(f"_sync_deleted_table: Error checking row in Access for {table_name}: {e}")
                 continue
             
-            # Progress indication (similar to show_progress but without bar chart)
+            # Progress indication with ETA
             current_time = time.time()
             if current_time - last_progress_time >= progress_interval or rows_checked == total_rows:
                 percentage = (rows_checked / total_rows * 100) if total_rows > 0 else 0
                 
-                # Build progress bar (like show_progress)
+                # Build progress bar
                 bar_length = 40
                 filled_length = int(bar_length * rows_checked // total_rows) if total_rows > 0 else 0
                 bar = '█' * filled_length + '░' * (bar_length - filled_length)
                 
-                # Calculate ETA
-                elapsed = current_time - last_progress_time if last_progress_time > 0 else 0
+                # Calculate ETA using check_start_time
                 eta_str = ""
-                if rows_checked > 0 and elapsed > 0 and rows_checked < total_rows:
-                    rate = rows_checked / elapsed
-                    remaining_seconds = (total_rows - rows_checked) / rate if rate > 0 else 0
-                    if remaining_seconds < 60:
-                        eta_str = f" ETA: {remaining_seconds:.0f}s"
-                    elif remaining_seconds < 3600:
-                        eta_str = f" ETA: {remaining_seconds / 60:.1f}m"
-                    else:
-                        eta_str = f" ETA: {remaining_seconds / 3600:.1f}h"
+                if rows_checked > 0 and rows_checked < total_rows:
+                    elapsed_since_start = current_time - check_start_time
+                    if elapsed_since_start > 0:
+                        rate = rows_checked / elapsed_since_start
+                        remaining_seconds = (total_rows - rows_checked) / rate
+                        if remaining_seconds < 60:
+                            eta_str = f" ETA: {remaining_seconds:.0f}s"
+                        elif remaining_seconds < 3600:
+                            eta_str = f" ETA: {remaining_seconds / 60:.1f}m"
+                        else:
+                            eta_str = f" ETA: {remaining_seconds / 3600:.1f}h"
                 
-                # Print progress line (overwrites previous line)
                 progress_msg = f"      Progress: [{bar}] {percentage:.1f}% ({rows_checked}/{total_rows}){eta_str} - {len(rows_to_delete)} rows marked for deletion"
                 print(progress_msg, end='\r', flush=True)
                 last_progress_time = current_time
@@ -2068,6 +2075,7 @@ class ReplicationManager:
         delete_total = len(rows_to_delete)
         delete_processed = 0
         delete_last_progress_time = time.time()
+        delete_start_time = time.time()  # Record start time for ETA calculation
         
         for where_clause in rows_to_delete:
             delete_sql = f"DELETE FROM {safe_table_name} WHERE {where_clause}"
@@ -2081,7 +2089,7 @@ class ReplicationManager:
             
             delete_processed += 1
             
-            # Progress indication for deletion phase
+            # Progress indication for deletion phase with ETA
             delete_current_time = time.time()
             if delete_current_time - delete_last_progress_time >= progress_interval or delete_processed == delete_total:
                 delete_percentage = (delete_processed / delete_total * 100) if delete_total > 0 else 0
@@ -2089,7 +2097,21 @@ class ReplicationManager:
                 delete_filled_length = int(delete_bar_length * delete_processed // delete_total) if delete_total > 0 else 0
                 delete_bar = '█' * delete_filled_length + '░' * (delete_bar_length - delete_filled_length)
                 
-                delete_msg = f"      Deleting: [{delete_bar}] {delete_percentage:.1f}% ({delete_processed}/{delete_total})"
+                # Calculate ETA for deletion phase
+                delete_eta_str = ""
+                if delete_processed > 0 and delete_processed < delete_total:
+                    delete_elapsed = delete_current_time - delete_start_time
+                    if delete_elapsed > 0:
+                        delete_rate = delete_processed / delete_elapsed
+                        delete_remaining_seconds = (delete_total - delete_processed) / delete_rate
+                        if delete_remaining_seconds < 60:
+                            delete_eta_str = f" ETA: {delete_remaining_seconds:.0f}s"
+                        elif delete_remaining_seconds < 3600:
+                            delete_eta_str = f" ETA: {delete_remaining_seconds / 60:.1f}m"
+                        else:
+                            delete_eta_str = f" ETA: {delete_remaining_seconds / 3600:.1f}h"
+                
+                delete_msg = f"      Deleting: [{delete_bar}] {delete_percentage:.1f}% ({delete_processed}/{delete_total}){delete_eta_str}"
                 print(delete_msg, end='\r', flush=True)
                 delete_last_progress_time = delete_current_time
         
