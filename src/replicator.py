@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__version__ = "$Revision: 1.17 $"
+__version__ = "$Revision: 1.19 $"
 
 import sys
 import os
@@ -151,7 +151,7 @@ class ReplicationManager:
         self.no_auto_index = False          # suppress automatic index/constraint creation
         self.adjust_ms_access = False       # adjust MS Access schema flag
         self.full_refresh = False           # full refresh flag
-        self.sync_deleted = False           # sync deleted records flag
+        self.sync_deleted = False           # sync deleted records flag (boolean)
         self.slow = False                   # slow deletion mode flag
         
         self.parameters = {}
@@ -1762,7 +1762,7 @@ class ReplicationManager:
     
     def sync_deleted_tables(self, tables_to_process):
         """Synchronize deleted records by comparing row counts between Access and PostgreSQL.
-        If counts differ, call sync_deleted() for that table."""
+        If counts differ, call _sync_deleted_table() for that table."""
         if self.trace:
             frame = inspect.currentframe()
             logger.info(f"Line {frame.f_lineno} - sync_deleted_tables called with {len(tables_to_process)} tables")
@@ -1812,12 +1812,12 @@ class ReplicationManager:
             if self.slow:
                 # Slow mode: process all tables regardless of counts
                 print(f"    → SLOW MODE: processing {table_name}")
-                self.sync_deleted(table_name, safe_table_name, access_count, pg_count)
+                self._sync_deleted_table(table_name, safe_table_name, access_count, pg_count)
                 tables_processed += 1
             elif access_count != pg_count:
                 # Fast mode: only process when counts differ
                 print(f"    → Counts differ - processing {table_name}")
-                self.sync_deleted(table_name, safe_table_name, access_count, pg_count)
+                self._sync_deleted_table(table_name, safe_table_name, access_count, pg_count)
                 tables_processed += 1
             else:
                 # Fast mode: counts match, skip
@@ -1832,17 +1832,287 @@ class ReplicationManager:
         logger.info(f"sync_deleted_tables completed: {tables_processed} processed, {tables_skipped} skipped")
     
     # ========================================================================
-    # SYNC DELETED (STUB)
+    # SYNC DELETED TABLE (PRIVATE METHOD - FULL IMPLEMENTATION WITH PROGRESS BAR)
     # ========================================================================
     
-    def sync_deleted(self, table_name, safe_table_name, access_count, pg_count):
-        """Stub method for actual deletion synchronization. Will be implemented later."""
+    def _sync_deleted_table(self, table_name, safe_table_name, access_count, pg_count):
+        """Delete rows from PostgreSQL that no longer exist in MS Access.
+        Uses PRIMARY KEY or first UNIQUE constraint to identify matching rows.
+        """
         if self.trace:
             frame = inspect.currentframe()
-            logger.info(f"Line {frame.f_lineno} - sync_deleted called for {table_name} (Access: {access_count}, PostgreSQL: {pg_count})")
+            logger.info(f"Line {frame.f_lineno} - _sync_deleted_table called for {table_name}")
         
-        print(f"      [STUB] sync_deleted would process {table_name}")
-        logger.info(f"sync_deleted: stub called for {table_name} (Access: {access_count}, PostgreSQL: {pg_count})")
+        print(f"      Syncing {table_name}: PostgreSQL has {pg_count} rows, Access has {access_count} rows")
+        logger.info(f"_sync_deleted_table: Processing {table_name} (Access: {access_count}, PostgreSQL: {pg_count})")
+        
+        # Step 1: Identify the key columns to use for matching (PK or first UNIQUE)
+        key_columns = []
+        key_column_names = []
+        
+        # First, try to find PRIMARY KEY
+        pk_sql = f"""
+            SELECT a.attname
+            FROM pg_index i
+            JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = ANY(i.indkey)
+            JOIN pg_class c ON c.oid = i.indrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE c.relname = '{escape_postgresql_string(safe_table_name.strip('"'))}'
+            AND n.nspname = 'public'
+            AND i.indisprimary
+            ORDER BY a.attnum
+        """
+        pk_columns = self.pg_sql_execute(pk_sql, fetch_all=True)
+        
+        if pk_columns:
+            key_columns = [row[0] for row in pk_columns]
+            key_column_names = [self.sanitise_token_for_postgresql(col) for col in key_columns]
+            logger.info(f"_sync_deleted_table: {table_name} using PRIMARY KEY: {', '.join(key_columns)}")
+        else:
+            # No PRIMARY KEY - look for first UNIQUE constraint
+            unique_sql = f"""
+                SELECT a.attname
+                FROM pg_constraint c
+                JOIN pg_class t ON t.oid = c.conrelid
+                JOIN pg_namespace n ON n.oid = t.relnamespace
+                JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ANY(c.conkey)
+                WHERE t.relname = '{escape_postgresql_string(safe_table_name.strip('"'))}'
+                AND n.nspname = 'public'
+                AND c.contype = 'u'
+                ORDER BY c.conname, a.attnum
+                LIMIT 10
+            """
+            unique_columns = self.pg_sql_execute(unique_sql, fetch_all=True)
+            
+            if unique_columns:
+                key_columns = [row[0] for row in unique_columns]
+                key_column_names = [self.sanitise_token_for_postgresql(col) for col in key_columns]
+                logger.info(f"_sync_deleted_table: {table_name} using UNIQUE constraint: {', '.join(key_columns)}")
+            else:
+                # No key available - cannot sync deletions
+                print(f"      ⚠ WARNING: {table_name} has no PRIMARY KEY or UNIQUE constraint - cannot sync deletions")
+                logger.warning(f"_sync_deleted_table: {table_name} has no PK or UNIQUE constraint - skipping")
+                return
+        
+        # Step 2: Build column list for SELECT (all columns for reference, but we only need keys)
+        # Get all column names from the table
+        columns_sql = f"""
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+            AND LOWER(table_name) = LOWER('{escape_postgresql_string(safe_table_name.strip('"'))}')
+            ORDER BY ordinal_position
+        """
+        all_columns = self.pg_sql_execute(columns_sql, fetch_all=True)
+        all_column_names = [row[0] for row in (all_columns or [])]
+        
+        if not all_column_names:
+            print(f"      ⚠ WARNING: {table_name} has no columns? - skipping")
+            logger.error(f"_sync_deleted_table: {table_name} has no columns - skipping")
+            return
+        
+        # Step 3: Fetch all rows from PostgreSQL
+        select_sql = f"SELECT {', '.join([self.sanitise_token_for_postgresql(col) for col in all_column_names])} FROM {safe_table_name}"
+        
+        try:
+            self.pg_cursor.execute(select_sql)
+            pg_rows = self.pg_cursor.fetchall()
+        except Exception as e:
+            print(f"      ✗ ERROR: Failed to fetch rows from PostgreSQL for {table_name}: {e}")
+            logger.error(f"_sync_deleted_table: Failed to fetch rows from {table_name}: {e}")
+            return
+        
+        if not pg_rows:
+            print(f"      No rows in PostgreSQL for {table_name} - nothing to delete")
+            logger.info(f"_sync_deleted_table: {table_name} has no rows in PostgreSQL")
+            return
+        
+        # Step 4: For each row, check existence in Access and build DELETE list
+        rows_to_delete = []
+        
+        # Build a dictionary of column index positions for key columns
+        key_indices = []
+        for key_col in key_columns:
+            for idx, col_name in enumerate(all_column_names):
+                if col_name.lower() == key_col.lower():
+                    key_indices.append(idx)
+                    break
+        
+        if len(key_indices) != len(key_columns):
+            print(f"      ⚠ WARNING: Could not locate all key columns in {table_name}")
+            logger.warning(f"_sync_deleted_table: Key columns {key_columns} not found in {table_name}")
+            return
+        
+        # Build WHERE clause template for Access lookup
+        access_where_parts = []
+        for key_col in key_columns:
+            access_where_parts.append(f"[{key_col}] = ?")
+        access_where_clause = " AND ".join(access_where_parts)
+        
+        # For progress reporting
+        total_rows = len(pg_rows)
+        rows_checked = 0
+        last_progress_time = time.time()
+        progress_interval = 2  # seconds (matches show_progress interval)
+        
+        print(f"      Checking {total_rows} rows from PostgreSQL...")
+        
+        for pg_row in pg_rows:
+            rows_checked += 1
+            
+            # Extract key values from the row
+            key_values = []
+            for idx in key_indices:
+                val = pg_row[idx]
+                # Convert to Python literal for Access query (handle None, strings, etc.)
+                if val is None:
+                    key_values.append("NULL")
+                elif isinstance(val, str):
+                    # Escape single quotes for Access SQL
+                    escaped = val.replace("'", "''")
+                    key_values.append(f"'{escaped}'")
+                elif isinstance(val, (int, float)):
+                    key_values.append(str(val))
+                elif isinstance(val, datetime):
+                    key_values.append(f"#{val.strftime('%Y-%m-%d %H:%M:%S')}#")
+                elif isinstance(val, date):
+                    key_values.append(f"#{val.strftime('%Y-%m-%d')}#")
+                elif isinstance(val, bool):
+                    key_values.append("True" if val else "False")
+                else:
+                    key_values.append(f"'{escape_postgresql_string(str(val))}'")
+            
+            # Build the Access SQL query
+            access_sql = f"SELECT COUNT(*) FROM [{table_name}] WHERE {access_where_clause}"
+            
+            # Replace ? placeholders with actual values
+            for i, kv in enumerate(key_values):
+                access_sql = access_sql.replace("?", kv, 1)
+            
+            # Check if row exists in Access
+            try:
+                recordset = self.dao_conn.OpenRecordset(access_sql)
+                count = recordset.Fields(0).value
+                recordset.Close()
+                
+                if count == 0:
+                    # Row does not exist in Access - mark for deletion
+                    # Build WHERE clause for PostgreSQL DELETE
+                    delete_where_parts = []
+                    for idx, key_col in enumerate(key_columns):
+                        val = pg_row[key_indices[idx]]
+                        if val is None:
+                            delete_where_parts.append(f"{self.sanitise_token_for_postgresql(key_col)} IS NULL")
+                        elif isinstance(val, str):
+                            delete_where_parts.append(f"{self.sanitise_token_for_postgresql(key_col)} = '{escape_postgresql_string(val)}'")
+                        elif isinstance(val, (int, float, Decimal)):
+                            delete_where_parts.append(f"{self.sanitise_token_for_postgresql(key_col)} = {val}")
+                        elif isinstance(val, datetime):
+                            delete_where_parts.append(f"{self.sanitise_token_for_postgresql(key_col)} = '{val.strftime('%Y-%m-%d %H:%M:%S')}'")
+                        elif isinstance(val, date):
+                            delete_where_parts.append(f"{self.sanitise_token_for_postgresql(key_col)} = '{val.strftime('%Y-%m-%d')}'")
+                        elif isinstance(val, bool):
+                            delete_where_parts.append(f"{self.sanitise_token_for_postgresql(key_col)} = {str(val).upper()}")
+                        else:
+                            delete_where_parts.append(f"{self.sanitise_token_for_postgresql(key_col)} = '{escape_postgresql_string(str(val))}'")
+                    
+                    where_clause = " AND ".join(delete_where_parts)
+                    rows_to_delete.append(where_clause)
+            except Exception as e:
+                logger.warning(f"_sync_deleted_table: Error checking row in Access for {table_name}: {e}")
+                continue
+            
+            # Progress indication (similar to show_progress but without bar chart)
+            current_time = time.time()
+            if current_time - last_progress_time >= progress_interval or rows_checked == total_rows:
+                percentage = (rows_checked / total_rows * 100) if total_rows > 0 else 0
+                
+                # Build progress bar (like show_progress)
+                bar_length = 40
+                filled_length = int(bar_length * rows_checked // total_rows) if total_rows > 0 else 0
+                bar = '█' * filled_length + '░' * (bar_length - filled_length)
+                
+                # Calculate ETA
+                elapsed = current_time - last_progress_time if last_progress_time > 0 else 0
+                eta_str = ""
+                if rows_checked > 0 and elapsed > 0 and rows_checked < total_rows:
+                    rate = rows_checked / elapsed
+                    remaining_seconds = (total_rows - rows_checked) / rate if rate > 0 else 0
+                    if remaining_seconds < 60:
+                        eta_str = f" ETA: {remaining_seconds:.0f}s"
+                    elif remaining_seconds < 3600:
+                        eta_str = f" ETA: {remaining_seconds / 60:.1f}m"
+                    else:
+                        eta_str = f" ETA: {remaining_seconds / 3600:.1f}h"
+                
+                # Print progress line (overwrites previous line)
+                progress_msg = f"      Progress: [{bar}] {percentage:.1f}% ({rows_checked}/{total_rows}){eta_str} - {len(rows_to_delete)} rows marked for deletion"
+                print(progress_msg, end='\r', flush=True)
+                last_progress_time = current_time
+        
+        print()  # Newline after progress
+        
+        # Step 5: Execute deletions
+        if not rows_to_delete:
+            print(f"      No rows to delete from {table_name}")
+            logger.info(f"_sync_deleted_table: {table_name} - no rows to delete")
+            return
+        
+        print(f"      Deleting {len(rows_to_delete)} rows from {table_name}...")
+        logger.info(f"_sync_deleted_table: Deleting {len(rows_to_delete)} rows from {table_name}")
+        
+        deleted_count = 0
+        error_count = 0
+        
+        # Progress bar for deletion phase
+        delete_total = len(rows_to_delete)
+        delete_processed = 0
+        delete_last_progress_time = time.time()
+        
+        for where_clause in rows_to_delete:
+            delete_sql = f"DELETE FROM {safe_table_name} WHERE {where_clause}"
+            try:
+                self.pg_cursor.execute(delete_sql)
+                deleted_count += 1
+            except Exception as e:
+                logger.error(f"_sync_deleted_table: Failed to delete row from {table_name}: {e}")
+                logger.debug(f"Failed DELETE SQL: {delete_sql}")
+                error_count += 1
+            
+            delete_processed += 1
+            
+            # Progress indication for deletion phase
+            delete_current_time = time.time()
+            if delete_current_time - delete_last_progress_time >= progress_interval or delete_processed == delete_total:
+                delete_percentage = (delete_processed / delete_total * 100) if delete_total > 0 else 0
+                delete_bar_length = 40
+                delete_filled_length = int(delete_bar_length * delete_processed // delete_total) if delete_total > 0 else 0
+                delete_bar = '█' * delete_filled_length + '░' * (delete_bar_length - delete_filled_length)
+                
+                delete_msg = f"      Deleting: [{delete_bar}] {delete_percentage:.1f}% ({delete_processed}/{delete_total})"
+                print(delete_msg, end='\r', flush=True)
+                delete_last_progress_time = delete_current_time
+        
+        print()  # Newline after deletion progress
+        
+        self.pg_conn.commit()
+        
+        print(f"      ✓ Deleted {deleted_count} rows from {table_name} (errors: {error_count})")
+        logger.info(f"_sync_deleted_table: Completed {table_name} - deleted {deleted_count}, errors {error_count}")
+        
+        # Update validation results after deletion
+        # Re-query counts
+        count_sql = f"SELECT COUNT(*) FROM {safe_table_name}"
+        result = self.pg_sql_execute(count_sql, fetch_one=True)
+        new_pg_count = result[0] if result else 0
+        
+        self.validation_results[table_name] = {
+            'source_count': access_count,
+            'target_count': new_pg_count,
+            'matched': access_count == new_pg_count,
+            'difference': access_count - new_pg_count,
+            'deleted': deleted_count
+        }
     
     # ========================================================================
     # FOREIGN KEY DISCOVERY
@@ -2209,6 +2479,7 @@ class ReplicationManager:
             ADD CONSTRAINT {safe_fk_name} 
             FOREIGN KEY ({', '.join(resolved_base)}) 
             REFERENCES {safe_ref_table} ({', '.join(resolved_ref)})
+            ON DELETE CASCADE
         """
         
         try:
