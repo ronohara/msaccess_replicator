@@ -34,8 +34,8 @@ component is being strongly de-emphasized.
 
 I would estimate that many many users of the original MS Access tool
 have only modest transaction and storage capacity requirements, and very
-limited budgets for software migrations, so a free tool that allows them
-to then use the amazing amount development in the AI community for
+limited budgets for software migrations, so a free tool like this allows
+them to then use the amazing amount development in the AI community for
 analysing data.
 
 This replicator is a bare bones equivalent of MS SQL Server Migration
