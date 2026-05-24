@@ -35,7 +35,7 @@ component is being strongly de-emphasized.
 I would estimate that many many users of the original MS Access tool
 have only modest transaction and storage capacity requirements, and very
 limited budgets for software migrations, so a free tool like this allows
-them to then use the amazing amount development in the AI community for
+them to then use the amazing amount of development in the AI community for
 analysing data.
 
 This replicator is a bare bones equivalent of MS SQL Server Migration
@@ -46,3 +46,19 @@ from many AI integration platforms.
 
 Refer to the installation notes in the MSAccess-replicator PDF file in
 the /docs directory
+
+## Licensing note.
+
+Although this is an MIT licensed project, the documentation is explicitly
+excluded from that license.
+
+It stands alone as a copyright document delivered in .pdf format and
+is available for you to read under the usual fair use arrangement for
+this sort of documentation.
+
+We have done this so that this repository can be used as a central
+point to coordinate revisions ... and retaining control of the
+docummentation encourages people to work on this repository instead
+of just forking their own version. But of course people remain free
+to do that too.
+
