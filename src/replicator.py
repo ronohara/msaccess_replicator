@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__version__ = "$Revision: 1.34 $"
+__version__ = "$Revision: 1.35 $"
 
 import sys
 import os
@@ -153,6 +153,7 @@ class ReplicationManager:
         self.full_refresh = False           # full refresh flag
         self.sync_deleted = False           # sync deleted records flag (boolean)
         self.slow = False                   # slow deletion mode flag
+        self.nonvolatile = False            # enable non-volatile table optimization
         
         self.parameters = {}
         self.dao_conn = None
@@ -753,6 +754,30 @@ class ReplicationManager:
         count_sql = f"SELECT COUNT(*) FROM {safe_table_name}"
         result = self.pg_sql_execute(count_sql, fetch_one=True)
         target_row_count = result[0] if result else 0
+        
+        # Check for non-volatile table optimization
+        nonvolatile_tables = self.parameters.get('nonvolatile', [])
+        is_nonvolatile = table_name in nonvolatile_tables
+        
+        if self.nonvolatile and is_nonvolatile:
+            if source_row_count == target_row_count:
+                msg = f"Table {table_name} (non-volatile): row counts match (Access: {source_row_count}, PostgreSQL: {target_row_count}) - skipping copy (--nonvolatile enabled)"
+                logger.info(msg)
+                print(msg)
+                # Store validation result without copying
+                self.validation_results[table_name] = {
+                    'source_count': source_row_count,
+                    'target_count': target_row_count,
+                    'matched': True,
+                    'difference': 0,
+                    'nonvolatile_skipped': True
+                }
+                return
+            else:
+                msg = f"Table {table_name} (non-volatile): row counts differ (Access: {source_row_count}, PostgreSQL: {target_row_count}) - copying despite --nonvolatile"
+                logger.info(msg)
+                if self.verbose:
+                    print(msg)
         
         has_unique_constraint = bool(table_info['primary_key'] or table_info['unique_keys'])
         
@@ -3011,6 +3036,7 @@ class ReplicationManager:
         print(f"  adjust_ms_access: {self.adjust_ms_access}")
         print(f"  sync_deleted: {self.sync_deleted}")
         print(f"  slow: {self.slow}")
+        print(f"  nonvolatile: {self.nonvolatile}")
         
         print("\n--- VALIDATION RESULTS ---")
         if self.validation_results:
@@ -3020,7 +3046,9 @@ class ReplicationManager:
                 target = result.get('target_count', 'N/A')
                 pg_before = result.get('pg_count_before', 'N/A')
                 deleted = result.get('deleted', 0)
-                print(f"  {status} {table_name}: Access={source}, PG Before={pg_before}, PG After={target}, Deleted={deleted}")
+                nonvolatile_skipped = result.get('nonvolatile_skipped', False)
+                nv_flag = " [NV SKIPPED]" if nonvolatile_skipped else ""
+                print(f"  {status} {table_name}: Access={source}, PG Before={pg_before}, PG After={target}, Deleted={deleted}{nv_flag}")
         else:
             print("  No validation results available")
         
@@ -3081,7 +3109,7 @@ class ReplicationManager:
         
         output_data = {}
         
-        sections_order = ['global', 'DAO', 'postgresql', 'excluded', 'tables', 'primarykeys', 'foreignkeys', 'transformations']
+        sections_order = ['global', 'DAO', 'postgresql', 'excluded', 'nonvolatile', 'tables', 'primarykeys', 'foreignkeys', 'transformations']
         
         for section in sections_order:
             if section in self.parameters:
@@ -3141,6 +3169,8 @@ def main():
                         help='Synchronize deleted records from Access to PostgreSQL')
     parser.add_argument('--slow', action='store_true',
                         help='Use slower but safer deletion method (only valid with --sync-deleted)')
+    parser.add_argument('--nonvolatile', action='store_true',
+                        help='Skip copying non-volatile tables when row counts match')
     
     # Mutually exclusive action group
     action_group = parser.add_mutually_exclusive_group()
@@ -3255,6 +3285,7 @@ def main():
     manager.adjust_ms_access = args.adjust_ms_access
     manager.sync_deleted = args.sync_deleted
     manager.slow = args.slow
+    manager.nonvolatile = args.nonvolatile
     manager.parameters = parameters
     
     print("Replication processing starts")
