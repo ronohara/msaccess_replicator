@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__version__ = "$Revision: 1.36 $"
+__version__ = "$Revision: 1.37 $"
 
 import sys
 import os
@@ -804,7 +804,9 @@ class ReplicationManager:
         target_row_count = result[0] if result else 0
         
         # Check for non-volatile table optimization
-        nonvolatile_tables = self.parameters.get('nonvolatile', [])
+        nonvolatile_tables = self.parameters.get('nonvolatile')
+        if nonvolatile_tables is None:
+            nonvolatile_tables = []
         is_nonvolatile = table_name in nonvolatile_tables
         
         # Handle non-volatile optimization with SLOW mode override
@@ -1483,7 +1485,9 @@ class ReplicationManager:
             frame = inspect.currentframe()
             logger.info(f"Line {frame.f_lineno} - get_all_tables_to_process called")
         
-        tables_config = self.parameters.get('tables', [])
+        tables_config = self.parameters.get('tables')
+        if tables_config is None:
+            tables_config = []
         
         if tables_config and len(tables_config) > 0:
             logger.info("Using 'tables' section from configuration")
@@ -3184,10 +3188,8 @@ class ReplicationManager:
             logger.error("Failed to open DAO connection")
             return False
         
-        # Load all tables first
-        if not self.get_all_tables_to_process():
-            logger.error("Failed to load database tables")
-            return False
+        # Load all tables first (auto-discovery if no tables section)
+        table_names = self.get_all_tables_to_process()
         
         # Discover all foreign keys at once
         self.get_foreign_keys()
@@ -3202,25 +3204,56 @@ class ReplicationManager:
         sections_order = ['global', 'DAO', 'postgresql', 'excluded', 'nonvolatile', 'tables', 'primarykeys', 'foreignkeys', 'transformations']
         
         for section in sections_order:
-            if section in self.parameters:
-                if section == 'tables':
-                    tables_list = []
-                    for item in self.parameters['tables']:
+            if section == 'tables':
+                # Always output the tables section with discovered tables
+                # Preserve any existing table configuration (like 'name' dict entries) if present
+                existing_tables = self.parameters.get('tables')
+                if existing_tables is None:
+                    existing_tables = []
+                tables_list = []
+                
+                if existing_tables and len(existing_tables) > 0:
+                    # There is an existing tables configuration - preserve it
+                    for item in existing_tables:
                         if isinstance(item, dict) and 'name' in item:
                             tables_list.append(item['name'])
-                    output_data[section] = tables_list
-                elif section == 'foreignkeys':
-                    fk_data = {}
-                    for fk_name, fk_info in self.parameters['foreignkeys'].items():
-                        fk_data[fk_name] = {
-                            'base_table': fk_info['base_table'],
-                            'reference_table': fk_info['reference_table'],
-                            'base_columns': fk_info['base_columns'],
-                            'reference_columns': fk_info['reference_columns']
-                        }
-                    output_data[section] = fk_data
+                        elif isinstance(item, str):
+                            tables_list.append(item)
+                        else:
+                            tables_list.append(str(item))
                 else:
-                    output_data[section] = self.parameters[section]
+                    # No existing tables configuration - use auto-discovered tables
+                    tables_list = table_names
+                
+                output_data[section] = tables_list
+                
+            elif section == 'nonvolatile':
+                # Preserve existing nonvolatile entries if they exist
+                existing_nonvolatile = self.parameters.get('nonvolatile')
+                if existing_nonvolatile is None:
+                    existing_nonvolatile = []
+                if existing_nonvolatile and len(existing_nonvolatile) > 0:
+                    output_data[section] = existing_nonvolatile
+                # If no nonvolatile section exists, don't create one (optional)
+                # To always include nonvolatile section even if empty, uncomment:
+                # else:
+                #     output_data[section] = []
+                
+            elif section == 'foreignkeys':
+                fk_data = {}
+                for fk_name, fk_info in self.parameters.get('foreignkeys', {}).items():
+                    fk_data[fk_name] = {
+                        'base_table': fk_info['base_table'],
+                        'reference_table': fk_info['reference_table'],
+                        'base_columns': fk_info['base_columns'],
+                        'reference_columns': fk_info['reference_columns']
+                    }
+                output_data[section] = fk_data
+                
+            elif section in self.parameters:
+                # For all other sections, copy existing values
+                output_data[section] = self.parameters[section]
+            # If section not in self.parameters, don't add it to output
         
         try:
             with open(output_file, 'w', encoding='utf-8') as f:

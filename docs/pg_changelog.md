@@ -1,5 +1,18 @@
 # PostgreSQL Replicator - Changelog
 
+## Version 1.37 (2026-05-26)
+
+**Fixed:**
+- `None` handling in `get_all_tables_to_process()` - converts `None` to empty list when `tables:` section exists but is empty
+- `None` handling in `copy_table()` - converts `None` to empty list when `nonvolatile:` section exists but is empty
+- `None` handling in `generate_yaml_file()` - converts `None` to empty list for both `tables` and `nonvolatile` sections
+- Error when `tables:` entry exists but is `None` (empty YAML section) causing `TypeError: 'NoneType' object is not iterable`
+
+**Changed:**
+- Auto-discovered tables are now included in generated YAML when `tables:` section is missing or `None`
+- Existing tables configuration is preserved when `tables:` section has content
+- Nonvolatile entries are preserved in generated YAML when they exist
+
 ## Version 1.36 (2026-05-26)
 
 **Added:**
@@ -127,6 +140,7 @@ Version numbers follow a sequential revision scheme:
 - **1.34** – Bug fixes (index error, validation reporting)
 - **1.35** – New feature (nonvolatile optimization)
 - **1.36** – Feature back-ports from ms_replicator.py (v1.1, v1.4, v1.5, v1.6, v1.8)
+- **1.37** – Bug fixes (None handling in configuration sections)
 
 ## File Locations
 
@@ -147,17 +161,18 @@ Version numbers follow a sequential revision scheme:
 
 ## Back-Ported Features from ms_replicator.py
 
-| ms_replicator Version | Feature | Status in pg_replicator v1.36 |
-|----------------------|---------|-------------------------------|
-| v1.1 | Master database connection for network testing | ✅ Included |
-| v1.4 | Enhanced result tracking from insert operations | ✅ Included |
-| v1.4 | Validation summary written to log file | ✅ Included |
-| v1.5 | Row existence checking method | ✅ Included |
-| v1.5 | Detailed logging for rejected rows | ✅ Included |
-| v1.5 | Distinguish between duplicate skipped and rejected | ✅ Included |
-| v1.6 | Skip automatic UNIQUE constraints on child tables | ✅ Included |
-| v1.8 | `--slow` option extended to normal replication | ✅ Included |
-| v1.8 | Total elapsed runtime display | ✅ Included |
+| ms_replicator Version | Feature | Status in pg_replicator |
+|----------------------|---------|------------------------|
+| v1.1 | Master database connection for network testing | ✅ v1.36 |
+| v1.4 | Enhanced result tracking from insert operations | ✅ v1.36 |
+| v1.4 | Validation summary written to log file | ✅ v1.36 |
+| v1.5 | Row existence checking method | ✅ v1.36 |
+| v1.5 | Detailed logging for rejected rows | ✅ v1.36 |
+| v1.5 | Distinguish between duplicate skipped and rejected | ✅ v1.36 |
+| v1.6 | Skip automatic UNIQUE constraints on child tables | ✅ v1.36 |
+| v1.8 | `--slow` option extended to normal replication | ✅ v1.36 |
+| v1.8 | Total elapsed runtime display | ✅ v1.36 |
+| v1.9 | None handling in configuration sections | ✅ v1.37 |
 
 ## Future Development
 

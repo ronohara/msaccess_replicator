@@ -1,5 +1,18 @@
 # MS SQL Server Replicator - Changelog
 
+## Version 1.9 (2026-05-26)
+
+**Fixed:**
+- `None` handling in `get_all_tables_to_process()` - converts `None` to empty list when `tables:` section exists but is empty
+- `None` handling in `copy_table()` - converts `None` to empty list when `nonvolatile:` section exists but is empty
+- `None` handling in `generate_yaml_file()` - converts `None` to empty list for both `tables` and `nonvolatile` sections
+- Error when `tables:` entry exists but is `None` (empty YAML section) causing `TypeError: 'NoneType' object is not iterable`
+
+**Changed:**
+- Auto-discovered tables are now included in generated YAML when `tables:` section is missing or `None`
+- Existing tables configuration is preserved when `tables:` section has content
+- Nonvolatile entries are preserved in generated YAML when they exist
+
 ## Version 1.8 (2026-05-26)
 
 **Added:**
@@ -108,7 +121,7 @@
 
 ## Version 1.0 (2026-05-25)
 
-**Initial port from PostgreSQL replicator (replicator.py v1.35)**
+**Initial port from PostgreSQL replicator (pg_replicator.py v1.35)**
 
 **Changes made:**
 - Connection library: `psycopg2` → `pymssql`
@@ -143,6 +156,35 @@
 
 ---
 
+## Command Line Options Summary (ms_replicator.py)
+
+| Option | Description |
+|--------|-------------|
+| `-c, --config` | Path to configuration file (default: ms_replicatorconfig.yaml) |
+| `-s, --source` | MS Access database file name |
+| `--shost` | SQL Server host name or IP |
+| `--sport` | SQL Server port number |
+| `--sdatabase` | SQL Server database name |
+| `--suser` | SQL Server user name |
+| `--spassword` | SQL Server password |
+| `-v, --verbose` | Print informational messages |
+| `--debug` | Enable SQL debugging output |
+| `--trace` | Enable trace logging to file |
+| `-a, --no-auto-index` | Suppress automatic creation of indexes/constraints for foreign keys |
+| `--sync-deleted` | Synchronize deleted records from Access to SQL Server |
+| `--slow` | Use slower processing; disables nonvolatile optimization (can be used with or without --sync-deleted) |
+| `--nonvolatile` | Skip copying non-volatile tables when row counts match (unless --slow is also enabled) |
+| `-S, --schema` | Drop and recreate database, then replicate schema ONLY |
+| `--adjust-ms-access` | Adjust MS Access schema (add AutoNumber primary key to tables without PK) |
+| `-l, --list` | List table names and exit |
+| `-n, --network` | Test both source and target connections |
+| `--dump` | Dump internal program data |
+| `--full-refresh` | Perform full refresh (drop and recreate all tables) |
+| `-V, --version` | Show version and exit |
+| `-o, --output` | Output file for generated YAML configuration |
+
+---
+
 ## Version Format
 
 Version numbers follow semantic versioning where practical:
@@ -159,29 +201,17 @@ Version numbers follow semantic versioning where practical:
 | `ms_replicatorconfig.yaml` | Configuration file |
 | `ms_changelog.md` | This changelog |
 
-## Command Line Options Summary
+## Version History Summary
 
-| Option | Description |
-|--------|-------------|
-| `-c, --config` | Path to configuration file (default: ms_replicatorconfig.yaml) |
-| `-s, --source` | MS Access database file name |
-| `--shost` | SQL Server host name or IP |
-| `--sport` | SQL Server port number |
-| `--sdatabase` | SQL Server database name |
-| `--suser` | SQL Server user name |
-| `--spassword` | SQL Server password |
-| `-v, --verbose` | Print informational messages |
-| `--debug` | Enable SQL debugging output |
-| `--trace` | Enable trace logging to file |
-| `-a, --no-auto-index` | Suppress automatic creation of indexes/constraints for foreign keys |
-| `--sync-deleted` | Synchronize deleted records from Access to SQL Server |
-| `--slow` | Use slower processing; disables nonvolatile optimization (now works without --sync-deleted) |
-| `--nonvolatile` | Skip copying non-volatile tables when row counts match (unless --slow enabled) |
-| `-S, --schema` | Drop and recreate database, then replicate schema ONLY |
-| `--adjust-ms-access` | Adjust MS Access schema (add AutoNumber primary key to tables without PK) |
-| `-l, --list` | List table names and exit |
-| `-n, --network` | Test both source and target connections |
-| `--dump` | Dump internal program data |
-| `--full-refresh` | Perform full refresh (drop and recreate all tables) |
-| `-V, --version` | Show version and exit |
-| `-o, --output` | Output file for generated YAML configuration |
+| Version | Date | Focus |
+|---------|------|-------|
+| 1.0 | 2026-05-25 | Initial port from PostgreSQL |
+| 1.1 | 2026-05-25 | Network testing with master database |
+| 1.2 | 2026-05-25 | Data type fixes, index compatibility |
+| 1.3 | 2026-05-25 | MERGE syntax, NULL key handling |
+| 1.4 | 2026-05-25 | Enhanced result tracking, logging |
+| 1.5 | 2026-05-25 | Row existence checking, duplicate handling |
+| 1.6 | 2026-05-25 | Skip auto UNIQUE constraints on child tables |
+| 1.7 | 2026-05-26 | Filtered unique indexes for nullable columns |
+| 1.8 | 2026-05-26 | Extended --slow option, total elapsed time |
+| 1.9 | 2026-05-26 | None handling in configuration sections |
