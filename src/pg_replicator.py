@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__version__ = "$Revision: 1.35 $"
+__version__ = "$Revision: 1.36 $"
 
 import sys
 import os
@@ -27,11 +27,11 @@ import time
 # LOGGING CONFIGURATION
 # ============================================================================
 
-logger = logging.getLogger('replicator')
+logger = logging.getLogger('pg_replicator')
 logger.setLevel(logging.DEBUG)
 
 file_handler = logging.handlers.RotatingFileHandler(
-    'replicator.log',
+    'pg_replicator.log',
     maxBytes=10 * 1024 * 1024,
     backupCount=10,
     encoding='utf-8'
@@ -152,7 +152,7 @@ class ReplicationManager:
         self.adjust_ms_access = False       # adjust MS Access schema flag
         self.full_refresh = False           # full refresh flag
         self.sync_deleted = False           # sync deleted records flag (boolean)
-        self.slow = False                   # slow deletion mode flag
+        self.slow = False                   # slow deletion mode flag (also affects nonvolatile optimization)
         self.nonvolatile = False            # enable non-volatile table optimization
         
         self.parameters = {}
@@ -172,6 +172,9 @@ class ReplicationManager:
         
         # Track empty tables (0 rows)
         self.empty_tables = []
+        
+        # Program start time for total elapsed calculation
+        self.program_start_time = None
         
         if self.trace:
             frame = inspect.currentframe()
@@ -492,9 +495,12 @@ class ReplicationManager:
             frame = inspect.currentframe()
             logger.info(f"Line {frame.f_lineno} - print_validation_summary called")
         
-        print("\n" + "=" * 110)
-        print("DATA VALIDATION SUMMARY")
-        print("=" * 110)
+        # Build summary lines for both console and log
+        summary_lines = []
+        
+        summary_lines.append("\n" + "=" * 110)
+        summary_lines.append("DATA VALIDATION SUMMARY")
+        summary_lines.append("=" * 110)
         
         # Re-query current counts for accurate display
         fresh_counts = {}
@@ -513,10 +519,10 @@ class ReplicationManager:
         
         if sync_was_performed:
             # Extended display with before/after counts and synced flag
-            print("\nPer-table validation results (after sync_deleted):")
-            print("-" * 110)
-            print(f"{'Table Name':<30} {'Access':>10} {'PG (Before)':>12} {'PG (After)':>11} {'Deleted':>10} {'Status':>8} {'Synced':>6}")
-            print("-" * 110)
+            summary_lines.append("\nPer-table validation results (after sync_deleted):")
+            summary_lines.append("-" * 110)
+            summary_lines.append(f"{'Table Name':<30} {'Access':>10} {'PG (Before)':>12} {'PG (After)':>11} {'Deleted':>10} {'Status':>8} {'Synced':>6}")
+            summary_lines.append("-" * 110)
             
             for table_name, result in self.validation_results.items():
                 source_count = result.get('source_count', 'N/A')
@@ -538,9 +544,9 @@ class ReplicationManager:
                 display_name = table_name[:29] if len(table_name) > 29 else table_name
                 deleted_display = str(deleted_count) if deleted_count > 0 else ""
                 
-                print(f"{display_name:<30} {source_count:>10} {pg_before:>12} {pg_after:>11} {deleted_display:>10} {status:>8} {synced_flag:>6}")
+                summary_lines.append(f"{display_name:<30} {source_count:>10} {pg_before:>12} {pg_after:>11} {deleted_display:>10} {status:>8} {synced_flag:>6}")
             
-            print("-" * 110)
+            summary_lines.append("-" * 110)
             
             # Additional consistency check summary - ONLY for tables that were synced
             inconsistent_tables = []
@@ -560,19 +566,19 @@ class ReplicationManager:
                     inconsistent_tables.append((table_name, 'deleted_mismatch', deleted, pg_before - pg_after))
             
             if inconsistent_tables:
-                print("\n⚠️  INCONSISTENCIES DETECTED (for synced tables only):")
+                summary_lines.append("\n⚠️  INCONSISTENCIES DETECTED (for synced tables only):")
                 for table_name, issue, actual, expected in inconsistent_tables:
                     if issue == 'count_mismatch':
-                        print(f"  - {table_name}: PostgreSQL count ({actual}) does not match Access ({expected}) after sync")
+                        summary_lines.append(f"  - {table_name}: PostgreSQL count ({actual}) does not match Access ({expected}) after sync")
                     else:
-                        print(f"  - {table_name}: Deleted count ({actual}) does not match calculated deletion ({expected})")
+                        summary_lines.append(f"  - {table_name}: Deleted count ({actual}) does not match calculated deletion ({expected})")
             
         else:
             # Standard display (no sync_deleted performed)
-            print("\nPer-table validation results:")
-            print("-" * 70)
-            print(f"{'Table Name':<30} {'Access':>10} {'PostgreSQL':>10} {'Status':>8}")
-            print("-" * 70)
+            summary_lines.append("\nPer-table validation results:")
+            summary_lines.append("-" * 70)
+            summary_lines.append(f"{'Table Name':<30} {'Access':>10} {'PostgreSQL':>10} {'Status':>8}")
+            summary_lines.append("-" * 70)
             
             for table_name, result in self.validation_results.items():
                 source_count = result.get('source_count', 'N/A')
@@ -581,9 +587,9 @@ class ReplicationManager:
                 status = "✓ PASS" if matched else "✗ FAIL"
                 
                 display_name = table_name[:29] if len(table_name) > 29 else table_name
-                print(f"{display_name:<30} {source_count:>10} {target_count:>10} {status:>8}")
+                summary_lines.append(f"{display_name:<30} {source_count:>10} {target_count:>10} {status:>8}")
             
-            print("-" * 70)
+            summary_lines.append("-" * 70)
         
         total_tables = len(self.validation_results)
         passed_tables = 0
@@ -595,33 +601,47 @@ class ReplicationManager:
         failed_tables = total_tables - passed_tables
         total_deleted = sum(result.get('deleted', 0) for result in self.validation_results.values())
         
-        print(f"\nTotal tables validated: {total_tables}")
-        print(f"Passed: {passed_tables}")
-        print(f"Failed: {failed_tables}")
+        summary_lines.append(f"\nTotal tables validated: {total_tables}")
+        summary_lines.append(f"Passed: {passed_tables}")
+        summary_lines.append(f"Failed: {failed_tables}")
         
         if total_deleted > 0:
-            print(f"Total rows deleted from PostgreSQL: {total_deleted}")
+            summary_lines.append(f"Total rows deleted from PostgreSQL: {total_deleted}")
         
         # Display empty tables information
         if self.empty_tables:
-            print(f"\nEmpty tables (0 rows in source): {len(self.empty_tables)}")
+            summary_lines.append(f"\nEmpty tables (0 rows in source): {len(self.empty_tables)}")
             for table in self.empty_tables:
-                print(f"  - {table}")
+                summary_lines.append(f"  - {table}")
         
-        print("=" * 110)
+        summary_lines.append("=" * 110)
+        
+        # Print to console
+        for line in summary_lines:
+            print(line)
+        
+        # Write to log file
+        for line in summary_lines:
+            logger.info(line)
     
     # ========================================================================
     # SINGLE ROW INSERT (no batching)
     # ========================================================================
     
     def insert_row(self, safe_table_name, columns, row_data, conflict_clause=None):
-        """Insert a single row into PostgreSQL"""
+        """Insert a single row into PostgreSQL.
+        Returns: (inserted, result_type, details)
+        result_type: 'SUCCESS', 'DUPLICATE_SKIPPED', 'FK_VIOLATION', 'ERROR'
+        """
         if self.trace:
             frame = inspect.currentframe()
             logger.info(f"Line {frame.f_lineno} - insert_row called with columns={columns}")
         
         if not row_data:
-            return 0
+            return 0, 'ERROR', 'No data'
+        
+        # Build key string for logging (extract primary key values if possible)
+        key_str = 'unknown'
         
         row_values = [convert_dao_value_to_postgresql_literal(val) for val in row_data]
         insert_sql = f"INSERT INTO {safe_table_name} ({', '.join(columns)}) VALUES ({', '.join(row_values)})"
@@ -632,17 +652,22 @@ class ReplicationManager:
         try:
             self.pg_cursor.execute(insert_sql)
             self.pg_conn.commit()
-            return 1
+            return 1, 'SUCCESS', key_str
         except Exception as e:
             self.pg_conn.rollback()
-            if 'foreign key constraint' in str(e).lower():
-                logger.debug(f"{insert_sql}")
+            if '23505' in str(e) or 'duplicate key' in str(e).lower():
+                # PostgreSQL duplicate key error code 23505
+                # Treat as success (row already in sync)
+                if self.debug:
+                    logger.debug(f"Duplicate key in INSERT for {safe_table_name}: {e}")
+                return 1, 'DUPLICATE_SKIPPED', key_str
+            elif 'foreign key constraint' in str(e).lower():
                 logger.debug(f"Foreign key violation in row: {e}")
-                return 0
+                return 0, 'FK_VIOLATION', key_str
             else:
                 logger.warning(f"{insert_sql}")
                 logger.warning(f"Failed to insert row: {e}")
-                return 0
+                return 0, 'ERROR', key_str
     
     # ========================================================================
     # TABLE EXISTENCE CHECK
@@ -668,6 +693,29 @@ class ReplicationManager:
             return exists
         except Exception as e:
             logger.error(f"Error checking if table exists: {e}")
+            return False
+    
+    def row_exists_in_postgresql(self, safe_table_name, key_columns, key_values):
+        """Check if a row exists in PostgreSQL by its key columns."""
+        if self.trace:
+            frame = inspect.currentframe()
+            logger.info(f"Line {frame.f_lineno} - row_exists_in_postgresql called")
+        
+        if not key_columns or not key_values:
+            return False
+        
+        # If any key value is NULL, existence check is unreliable - return False
+        if any(v is None for v in key_values):
+            return False
+        
+        where_clause = ' AND '.join([f"{col} = %s" for col in key_columns])
+        check_sql = f"SELECT COUNT(*) FROM {safe_table_name} WHERE {where_clause}"
+        
+        try:
+            result = self.pg_sql_execute(check_sql, fetch_one=True, params=key_values)
+            return result[0] > 0 if result else False
+        except Exception as e:
+            logger.warning(f"Error checking row existence: {e}")
             return False
     
     # ========================================================================
@@ -759,20 +807,29 @@ class ReplicationManager:
         nonvolatile_tables = self.parameters.get('nonvolatile', [])
         is_nonvolatile = table_name in nonvolatile_tables
         
+        # Handle non-volatile optimization with SLOW mode override
         if self.nonvolatile and is_nonvolatile:
             if source_row_count == target_row_count:
-                msg = f"Table {table_name} (non-volatile): row counts match (Access: {source_row_count}, PostgreSQL: {target_row_count}) - skipping copy (--nonvolatile enabled)"
-                logger.info(msg)
-                print(msg)
-                # Store validation result without copying
-                self.validation_results[table_name] = {
-                    'source_count': source_row_count,
-                    'target_count': target_row_count,
-                    'matched': True,
-                    'difference': 0,
-                    'nonvolatile_skipped': True
-                }
-                return
+                if self.slow:
+                    # SLOW mode overrides optimization - copy anyway
+                    msg = f"Table {table_name} (non-volatile): row counts match (Access: {source_row_count}, PostgreSQL: {target_row_count}) - SLOW MODE: copying anyway (optimization disabled for debugging)"
+                    logger.info(msg)
+                    print(msg)
+                    # Continue to normal copy below (do NOT return)
+                else:
+                    # Normal optimization - skip copy
+                    msg = f"Table {table_name} (non-volatile): row counts match (Access: {source_row_count}, PostgreSQL: {target_row_count}) - skipping copy (--nonvolatile enabled)"
+                    logger.info(msg)
+                    print(msg)
+                    # Store validation result without copying
+                    self.validation_results[table_name] = {
+                        'source_count': source_row_count,
+                        'target_count': target_row_count,
+                        'matched': True,
+                        'difference': 0,
+                        'nonvolatile_skipped': True
+                    }
+                    return
             else:
                 msg = f"Table {table_name} (non-volatile): row counts differ (Access: {source_row_count}, PostgreSQL: {target_row_count}) - copying despite --nonvolatile"
                 logger.info(msg)
@@ -815,14 +872,21 @@ class ReplicationManager:
             start_position = 0
             if target_row_count == 0:
                 msg = f"Table {table_name}: empty - copying ALL {rows_to_copy} rows with UPSERT"
+                if self.slow:
+                    msg += " (SLOW MODE enabled - full sync)"
                 logger.info(msg)
                 print(msg)
             else:
                 msg = f"Table {table_name}: {target_row_count} existing rows - syncing ALL {source_row_count} source rows with UPSERT"
+                if self.slow:
+                    msg += " (SLOW MODE enabled - full sync)"
                 logger.info(msg)
                 print(msg)
         
         violation_count = 0
+        foreign_key_violations = 0
+        duplicate_skipped_count = 0      # duplicate error but row exists (safe)
+        duplicate_rejected_count = 0     # duplicate error and row does NOT exist (problem)
         rows_inserted = 0
         
         conflict_clause = None
@@ -877,9 +941,27 @@ class ReplicationManager:
             
             # Insert the row if it has any columns
             if valid_columns:
-                inserted = self.insert_row(safe_table_name, valid_columns, row_data, conflict_clause)
-                rows_inserted += inserted
-                violation_count += (1 - inserted)
+                if conflict_clause and has_unique_constraint:
+                    # Use ON CONFLICT for PostgreSQL UPSERT
+                    inserted, result_type, details = self.insert_row(
+                        safe_table_name, valid_columns, row_data, conflict_clause
+                    )
+                    if result_type == 'DUPLICATE_SKIPPED':
+                        duplicate_skipped_count += 1
+                        rows_inserted += inserted
+                    elif result_type == 'DUPLICATE_REJECTED':
+                        duplicate_rejected_count += 1
+                        violation_count += 1
+                    elif result_type == 'FK_VIOLATION':
+                        foreign_key_violations += 1
+                        violation_count += 1
+                    else:
+                        rows_inserted += inserted
+                        violation_count += (1 - inserted)
+                else:
+                    inserted, result_type, details = self.insert_row(safe_table_name, valid_columns, row_data, None)
+                    rows_inserted += inserted
+                    violation_count += (1 - inserted)
             
             recordset.MoveNext()
         
@@ -896,10 +978,16 @@ class ReplicationManager:
                 msg = f"Completed {table_name}: Appended {rows_inserted} rows (elapsed: {elapsed_str})"
             else:
                 msg = f"Completed {table_name}: Synced {rows_inserted} rows (elapsed: {elapsed_str})"
+                if duplicate_skipped_count > 0:
+                    msg += f" (duplicates skipped (exists): {duplicate_skipped_count})"
+                if duplicate_rejected_count > 0:
+                    msg += f" (duplicates rejected (missing): {duplicate_rejected_count})"
+                if foreign_key_violations > 0:
+                    msg += f" (FK violations: {foreign_key_violations})"
             logger.info(msg)
             print(msg)
         
-        if rows_inserted > 0:
+        if rows_inserted > 0 or duplicate_skipped_count > 0 or duplicate_rejected_count > 0:
             self.validate_table_data(table_name, safe_table_name)
     
     # ========================================================================
@@ -1185,6 +1273,36 @@ class ReplicationManager:
             logger.error("4. Database exists")
             raise
     
+    def open_postgresql_connection_master(self):
+        """Connect to PostgreSQL using 'postgres' database for testing purposes only."""
+        if self.trace:
+            frame = inspect.currentframe()
+            logger.info(f"Line {frame.f_lineno} - open_postgresql_connection_master called")
+        
+        pg_params = self.parameters.get('postgresql', {})
+        required = ['host', 'port', 'user', 'password']
+        for param in required:
+            if param not in pg_params or pg_params[param] is None or pg_params[param] == '':
+                logger.error(f"Missing PostgreSQL parameter: {param}")
+                return False
+        
+        try:
+            self.pg_conn = psycopg2.connect(
+                host=pg_params['host'],
+                port=int(pg_params['port']),
+                database='postgres',
+                user=pg_params['user'],
+                password=pg_params['password']
+            )
+            self.pg_cursor = self.pg_conn.cursor()
+            logger.info("Connected to PostgreSQL postgres database for testing")
+            if self.verbose:
+                print("Connected to PostgreSQL postgres database for testing")
+            return True
+        except psycopg2.OperationalError as e:
+            logger.error(f"PostgreSQL connection failed: {e}")
+            raise
+    
     def open_connections(self):
         if self.trace:
             frame = inspect.currentframe()
@@ -1210,7 +1328,7 @@ class ReplicationManager:
     # SQL EXECUTION
     # ========================================================================
     
-    def pg_sql_execute(self, sql, fetch_one=False, fetch_all=False):
+    def pg_sql_execute(self, sql, fetch_one=False, fetch_all=False, params=None):
         if self.trace:
             frame = inspect.currentframe()
             sql_preview = sql[:500] + "..." if len(sql) > 500 else sql
@@ -1223,7 +1341,10 @@ class ReplicationManager:
             logger.debug(f"Executing SQL: {safe_sql[:500]}")
         
         try:
-            self.pg_cursor.execute(sql)
+            if params:
+                self.pg_cursor.execute(sql, params)
+            else:
+                self.pg_cursor.execute(sql)
             if fetch_one:
                 return self.pg_cursor.fetchone()
             if fetch_all:
@@ -1626,51 +1747,24 @@ class ReplicationManager:
     # ========================================================================
     # CREATE UNIQUE CONSTRAINT ON BASE TABLE (PRIVATE HELPER)
     # ========================================================================
+    # NOTE: PostgreSQL does NOT require the child side of a foreign key to be unique.
+    # Only the parent side (referenced table) needs a PRIMARY KEY or UNIQUE constraint.
+    # Therefore, this method should NOT be called. It is kept for completeness but
+    # the ensure_uniqueness_on_base_table method has been modified to skip creation
+    # of unnecessary unique constraints on child tables.
+    # ========================================================================
     
     def _create_unique_constraint_on_base_table(self, base_table, base_columns, fk_name):
-        """Create a UNIQUE constraint on the base table (child) for the columns used in the foreign key."""
+        """Create a UNIQUE constraint on the base table (child) for the columns used in the foreign key.
+        NOTE: This method should not be called as PostgreSQL does not require uniqueness
+        on the child side of a foreign key. It is kept for completeness but will log a warning.
+        """
         if self.trace:
             frame = inspect.currentframe()
             logger.info(f"Line {frame.f_lineno} - _create_unique_constraint_on_base_table called")
         
-        safe_base_table = self.sanitise_token_for_postgresql(base_table)
-        safe_columns = [self.sanitise_token_for_postgresql(col) for col in base_columns]
-        
-        # Generate a constraint name based on the FK name
-        constraint_name = self.sanitise_keyname_for_postgresql(f"unique_{fk_name}")
-        
-        # Check if constraint already exists (avoid duplicate)
-        check_sql = f"""
-            SELECT 1 FROM pg_constraint c
-            JOIN pg_class t ON t.oid = c.conrelid
-            JOIN pg_namespace n ON n.oid = t.relnamespace
-            WHERE t.relname = '{escape_postgresql_string(safe_base_table.strip('"'))}'
-            AND n.nspname = 'public'
-            AND c.contype = 'u'
-            AND c.conname = '{escape_postgresql_string(constraint_name)}'
-        """
-        exists = self.pg_sql_execute(check_sql, fetch_one=True)
-        if exists:
-            logger.info(f"UNIQUE constraint {constraint_name} already exists on {base_table}")
-            return constraint_name
-        
-        # Create the UNIQUE constraint
-        create_sql = f"""
-            ALTER TABLE {safe_base_table}
-            ADD CONSTRAINT {constraint_name}
-            UNIQUE ({', '.join(safe_columns)})
-        """
-        
-        try:
-            self.pg_sql_execute(create_sql)
-            self.pg_conn.commit()
-            logger.info(f"Created UNIQUE constraint {constraint_name} on {base_table}({', '.join(base_columns)})")
-            print(f"  Created UNIQUE constraint on {base_table} for foreign key reference")
-            return constraint_name
-        except Exception as e:
-            self.pg_conn.rollback()
-            logger.error(f"Failed to create UNIQUE constraint on {base_table}: {e}")
-            raise
+        logger.warning(f"NOT CREATING UNIQUE constraint on {base_table} - PostgreSQL does not require uniqueness on the child side of a foreign key. The foreign key will reference the parent's PRIMARY KEY directly.")
+        return None
     
     # ========================================================================
     # CREATE PRIMARY KEY ON BASE TABLE (PRIVATE HELPER)
@@ -1730,34 +1824,18 @@ class ReplicationManager:
     def ensure_uniqueness_on_base_table(self, base_table, base_columns, fk_name):
         """Ensure a uniqueness constraint (PRIMARY KEY if possible, otherwise UNIQUE) 
         on the base table columns required for the foreign key.
+        
+        NOTE: PostgreSQL does NOT require the child side of a foreign key to be unique.
+        Only the parent side (referenced table) needs uniqueness. Therefore, this method
+        now returns None (no action) and logs a warning instead of creating unnecessary
+        unique constraints.
         """
         if self.trace:
             frame = inspect.currentframe()
             logger.info(f"Line {frame.f_lineno} - ensure_uniqueness_on_base_table called")
         
-        safe_base_table = self.sanitise_token_for_postgresql(base_table)
-        
-        # Check if table already has any PRIMARY KEY
-        has_pk_sql = f"""
-            SELECT 1 FROM pg_constraint c
-            JOIN pg_class t ON t.oid = c.conrelid
-            JOIN pg_namespace n ON n.oid = t.relnamespace
-            WHERE t.relname = '{escape_postgresql_string(safe_base_table.strip('"'))}'
-            AND n.nspname = 'public'
-            AND c.contype = 'p'
-            LIMIT 1
-        """
-        existing_pk = self.pg_sql_execute(has_pk_sql, fetch_one=True)
-        
-        if existing_pk:
-            logger.info(f"Table {base_table} already has a PRIMARY KEY. Adding UNIQUE constraint instead.")
-            return self._create_unique_constraint_on_base_table(base_table, base_columns, fk_name)
-        else:
-            try:
-                return self._create_primary_key_on_base_table(base_table, base_columns, fk_name)
-            except Exception as e:
-                logger.warning(f"Cannot add PRIMARY KEY on {base_table}: {e}. Falling back to UNIQUE constraint.")
-                return self._create_unique_constraint_on_base_table(base_table, base_columns, fk_name)
+        logger.warning(f"Foreign key {fk_name}: PostgreSQL does NOT require uniqueness on child table '{base_table}' columns {base_columns}. Skipping automatic creation of unique constraint.")
+        return None
     
     # ========================================================================
     # ADJUST MS ACCESS SCHEMA
@@ -2916,6 +2994,9 @@ class ReplicationManager:
             frame = inspect.currentframe()
             logger.info(f"Line {frame.f_lineno} - replicate_tables called")
         
+        # Record program start time for total elapsed calculation
+        self.program_start_time = time.time()
+        
         self.validate_configuration()
         
         self.open_connections()
@@ -2963,6 +3044,14 @@ class ReplicationManager:
         
         self.print_validation_summary()
         
+        # Calculate and display total elapsed time
+        if self.program_start_time:
+            total_elapsed = time.time() - self.program_start_time
+            total_elapsed_str = self.format_elapsed(total_elapsed)
+            msg = f"\nTotal replication time: {total_elapsed_str}"
+            logger.info(msg)
+            print(msg)
+        
         self.close_connections()
     
     def test_network_connections(self):
@@ -2983,7 +3072,8 @@ class ReplicationManager:
                 print(f"MS Access connection: FAILED - {e}")
         
         try:
-            self.open_postgresql_connection()
+            # Use postgres database for connection test
+            self.open_postgresql_connection_master()
             logger.info("PostgreSQL connection: SUCCESS")
             if self.verbose:
                 print("PostgreSQL connection: SUCCESS")
@@ -3168,9 +3258,9 @@ def main():
     parser.add_argument('--sync-deleted', action='store_true',
                         help='Synchronize deleted records from Access to PostgreSQL')
     parser.add_argument('--slow', action='store_true',
-                        help='Use slower but safer deletion method (only valid with --sync-deleted)')
+                        help='Use slower processing; disables nonvolatile optimization (can be used with or without --sync-deleted)')
     parser.add_argument('--nonvolatile', action='store_true',
-                        help='Skip copying non-volatile tables when row counts match')
+                        help='Skip copying non-volatile tables when row counts match (unless --slow is also enabled)')
     
     # Mutually exclusive action group
     action_group = parser.add_mutually_exclusive_group()
@@ -3189,8 +3279,8 @@ def main():
     
     args = parser.parse_args()
     
-    if args.slow and not args.sync_deleted:
-        parser.error('--slow can only be used with --sync-deleted')
+    # --slow is now allowed without --sync-deleted (it also affects nonvolatile optimization)
+    # No error condition needed
     
     version_raw = __version__
     if args.version:
