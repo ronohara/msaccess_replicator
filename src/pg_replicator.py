@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__version__ = "$Revision: 1.38 $"
+__version__ = "$Revision: 1.39 $"
 
 import sys
 import os
@@ -182,6 +182,44 @@ class ReplicationManager:
         if self.trace:
             frame = inspect.currentframe()
             logger.info(f"Line {frame.f_lineno} - __init__ called")
+    
+    # ========================================================================
+    # EXIT PROGRAM (CENTRALIZED SHUTDOWN)
+    # ========================================================================
+    
+    def exit_program(self, exit_code=0, error_msg=None):
+        """Centralized program exit with connection cleanup and logging.
+        
+        Args:
+            exit_code: 0 for success, non-zero for error
+            error_msg: Optional error message to log before exit
+        """
+        if self.trace:
+            frame = inspect.currentframe()
+            logger.info(f"Line {frame.f_lineno} - exit_program called with exit_code={exit_code}, error_msg={error_msg}")
+        
+        # Close connections if they are open
+        try:
+            self.close_connections()
+        except Exception as e:
+            logger.warning(f"Error during connection cleanup: {e}")
+        
+        # Generate termination message
+        if exit_code == 0:
+            msg = f"pg_replicator.py version {__version__} terminated successfully"
+            logger.info(msg)
+            if self.verbose:
+                print(msg)
+        else:
+            if error_msg:
+                msg = f"pg_replicator.py version {__version__} terminated with errors: {error_msg}"
+            else:
+                msg = f"pg_replicator.py version {__version__} terminated with errors (exit code {exit_code})"
+            logger.error(msg)
+            if self.verbose:
+                print(msg)
+        
+        sys.exit(exit_code)
     
     # ========================================================================
     # SYSTEM TABLE IDENTIFICATION
@@ -697,15 +735,15 @@ class ReplicationManager:
         
         try:
             unquoted_name = safe_table_name.strip('"')
-            check_sql = """
+            check_sql = f"""
                 SELECT EXISTS (
                     SELECT 1 
                     FROM information_schema.tables 
                     WHERE table_schema = 'public' 
-                    AND LOWER(table_name) = LOWER(%s)
+                    AND LOWER(table_name) = LOWER('{escape_postgresql_string(unquoted_name)}')
                 )
             """
-            self.pg_cursor.execute(check_sql, (unquoted_name,))
+            self.pg_cursor.execute(check_sql)
             exists = self.pg_cursor.fetchone()[0]
             return exists
         except Exception as e:
@@ -725,11 +763,17 @@ class ReplicationManager:
         if any(v is None for v in key_values):
             return False
         
-        where_clause = ' AND '.join([f"{col} = %s" for col in key_columns])
+        where_parts = []
+        for col, val in zip(key_columns, key_values):
+            if val is None:
+                where_parts.append(f"{col} IS NULL")
+            else:
+                where_parts.append(f"{col} = {convert_dao_value_to_postgresql_literal(val)}")
+        where_clause = ' AND '.join(where_parts)
         check_sql = f"SELECT COUNT(*) FROM {safe_table_name} WHERE {where_clause}"
         
         try:
-            result = self.pg_sql_execute(check_sql, fetch_one=True, params=key_values)
+            result = self.pg_sql_execute(check_sql, fetch_one=True)
             return result[0] > 0 if result else False
         except Exception as e:
             logger.warning(f"Error checking row existence: {e}")
@@ -1350,19 +1394,40 @@ class ReplicationManager:
             frame = inspect.currentframe()
             logger.info(f"Line {frame.f_lineno} - close_connections called")
         
+        # Close PostgreSQL cursor
         if self.pg_cursor:
-            self.pg_cursor.close()
+            try:
+                self.pg_cursor.close()
+            except Exception as e:
+                if self.debug:
+                    logger.debug(f"Error closing pg_cursor: {e}")
+            self.pg_cursor = None
+        
+        # Close PostgreSQL connection
         if self.pg_conn:
-            self.pg_conn.close()
+            try:
+                self.pg_conn.close()
+            except Exception as e:
+                if self.debug:
+                    logger.debug(f"Error closing pg_conn: {e}")
+            self.pg_conn = None
+        
+        # Close DAO connection
         if self.dao_conn:
-            self.dao_conn.Close()
+            try:
+                self.dao_conn.Close()
+            except Exception as e:
+                if self.debug:
+                    logger.debug(f"Error closing DAO connection: {e}")
+            self.dao_conn = None
+        
         logger.info("Connections closed")
     
     # ========================================================================
     # SQL EXECUTION
     # ========================================================================
     
-    def pg_sql_execute(self, sql, fetch_one=False, fetch_all=False, params=None):
+    def pg_sql_execute(self, sql, fetch_one=False, fetch_all=False):
         if self.trace:
             frame = inspect.currentframe()
             sql_preview = sql[:500] + "..." if len(sql) > 500 else sql
@@ -1375,10 +1440,7 @@ class ReplicationManager:
             logger.debug(f"Executing SQL: {safe_sql[:500]}")
         
         try:
-            if params:
-                self.pg_cursor.execute(sql, params)
-            else:
-                self.pg_cursor.execute(sql)
+            self.pg_cursor.execute(sql)
             if fetch_one:
                 return self.pg_cursor.fetchone()
             if fetch_all:
@@ -1417,7 +1479,7 @@ class ReplicationManager:
             
             if not has_attributes and not has_primary and not has_unique:
                 logger.error(f"FATAL: Index '{idx.Name}' has no properties")
-                sys.exit(1)
+                self.exit_program(1, "Index has no properties")
             
             if has_attributes:
                 attrs = idx.Attributes
@@ -2290,7 +2352,6 @@ class ReplicationManager:
                     {order_by_clause}
                     LIMIT {batch_size}
                 """
-                params = None
             else:
                 # Subsequent batches - use WHERE with > last key values
                 # Validate that last_key_values has the correct length
@@ -2301,33 +2362,29 @@ class ReplicationManager:
                 if len(key_columns) == 1:
                     # Single key column - simple comparison with quoted column name
                     quoted_key_col = self.sanitise_token_for_postgresql(key_columns[0])
+                    last_value_literal = convert_dao_value_to_postgresql_literal(last_key_values[0])
                     select_sql = f"""
                         SELECT {', '.join([self.sanitise_token_for_postgresql(col) for col in all_column_names])}
                         FROM {safe_table_name}
-                        WHERE {quoted_key_col} > %s
+                        WHERE {quoted_key_col} > {last_value_literal}
                         {order_by_clause}
                         LIMIT {batch_size}
                     """
-                    params = [last_key_values[0]] if last_key_values else None
                 else:
                     # For composite keys, use tuple comparison with quoted column names
-                    quoted_key_columns = [self.sanitise_token_for_postgresql(col) for col in key_columns]
-                    placeholders = ', '.join(['%s'] * len(key_columns))
+                    quoted_key_columns_list = [self.sanitise_token_for_postgresql(col) for col in key_columns]
+                    last_values_literals = [convert_dao_value_to_postgresql_literal(v) for v in last_key_values]
                     select_sql = f"""
                         SELECT {', '.join([self.sanitise_token_for_postgresql(col) for col in all_column_names])}
                         FROM {safe_table_name}
-                        WHERE ({', '.join(quoted_key_columns)}) > ({placeholders})
+                        WHERE ({', '.join(quoted_key_columns_list)}) > ({', '.join(last_values_literals)})
                         {order_by_clause}
                         LIMIT {batch_size}
                     """
-                    params = list(last_key_values) if last_key_values else None
             
             # Execute the SELECT for this batch
             try:
-                if params is None:
-                    self.pg_cursor.execute(select_sql)
-                else:
-                    self.pg_cursor.execute(select_sql, params)
+                self.pg_cursor.execute(select_sql)
                 batch_rows = self.pg_cursor.fetchall()
             except Exception as e:
                 print(f"      ✗ ERROR: Failed to fetch batch {batch_number} from PostgreSQL for {table_name}: {e}")
@@ -2416,21 +2473,20 @@ class ReplicationManager:
                 for i in range(0, len(keys_to_delete), delete_batch_size):
                     sub_batch = keys_to_delete[i:i+delete_batch_size]
                     
-                    # Build parameterised DELETE query with quoted key columns
-                    quoted_key_columns = [self.sanitise_token_for_postgresql(col) for col in key_columns]
-                    row_placeholders = []
-                    flat_values = []
+                    # Build string concatenation DELETE query with quoted key columns
+                    quoted_key_columns_list = [self.sanitise_token_for_postgresql(col) for col in key_columns]
+                    row_value_lists = []
                     for pk_tuple in sub_batch:
-                        row_placeholders.append(f"({','.join(['%s'] * len(key_columns))})")
-                        flat_values.extend(pk_tuple)
+                        value_literals = [convert_dao_value_to_postgresql_literal(v) for v in pk_tuple]
+                        row_value_lists.append(f"({', '.join(value_literals)})")
                     
                     delete_sql = f"""
                         DELETE FROM {safe_table_name}
-                        WHERE ({', '.join(quoted_key_columns)}) IN ({', '.join(row_placeholders)})
+                        WHERE ({', '.join(quoted_key_columns_list)}) IN ({', '.join(row_value_lists)})
                     """
                     
                     try:
-                        self.pg_cursor.execute(delete_sql, flat_values)
+                        self.pg_cursor.execute(delete_sql)
                         total_deleted += len(sub_batch)
                     except Exception as e:
                         logger.error(f"_sync_deleted_table: Failed to delete batch from {table_name}: {e}")
@@ -2583,7 +2639,7 @@ class ReplicationManager:
                 logger.error(f"  Relation name: '{rel_name}'")
                 logger.error(f"  This indicates a corrupted or empty relation in MS Access")
                 logger.error(f"  Please check the MS Access database relationships")
-                sys.exit(1)
+                self.exit_program(1, "Relation has Fields.Count = 0")
             
             # MS Access: rel.Table = child (FK side), rel.ForeignTable = parent (referenced)
             child_table = decode_sketchy_utf16(rel.Table)
@@ -2621,7 +2677,7 @@ class ReplicationManager:
             if self.is_table_excluded(base_table):
                 logger.error(f"FATAL: Foreign key '{fk_name}' has base_table '{base_table}' in excluded list")
                 logger.error(f"  Cannot create foreign key on excluded table")
-                sys.exit(1)
+                self.exit_program(1, f"Cannot create foreign key on excluded table {base_table}")
             
             # Skip if child table is a system table
             if self.is_system_table_name(base_table):
@@ -2658,7 +2714,7 @@ class ReplicationManager:
                     logger.error(f"  Foreign key name: {fk_name}")
                     logger.error(f"  Configured: {fk_info['base_table']}({fk_info['base_columns']}) -> {fk_info['reference_table']}({fk_info['reference_columns']})")
                     logger.error(f"  Discovered: {discovered_info['base_table']}({discovered_info['base_columns']}) -> {discovered_info['reference_table']}({discovered_info['reference_columns']})")
-                    sys.exit(1)
+                    self.exit_program(1, "Foreign key name collision with different definition")
         
         logger.info(f"Discovered {len(filtered_fkeys)} foreign keys from MS Access (after exclusion and system table filtering)")
         logger.info(f"Configured {len(self.original_configured_fkeys)} foreign keys from YAML")
@@ -2837,7 +2893,7 @@ class ReplicationManager:
                     logger.warning(f"Cannot add uniqueness constraint to system table '{base_table}' - skipping foreign key")
                     if is_from_config:
                         logger.error(f"FATAL: Foreign key from CONFIGURATION FILE references system table")
-                        sys.exit(1)
+                        self.exit_program(1, "Foreign key from CONFIGURATION FILE references system table")
                     return
                 try:
                     constraint_name = self.ensure_uniqueness_on_base_table(base_table, base_columns, fk_name)
@@ -2848,7 +2904,7 @@ class ReplicationManager:
                     logger.error(f"Failed to automatically add uniqueness constraint for foreign key '{fk_name}': {e}")
                     if is_from_config:
                         logger.error(f"FATAL: Foreign key from CONFIGURATION FILE cannot be created")
-                        sys.exit(1)
+                        self.exit_program(1, f"Failed to create foreign key {fk_name} from configuration")
                     else:
                         logger.warning(f"Skipping foreign key from MS Access discovery")
                         return
@@ -2921,7 +2977,7 @@ class ReplicationManager:
             self.pg_conn.rollback()
             logger.error(f"Failed to create foreign key {fk_name}: {e}")
             if is_from_config:
-                sys.exit(1)
+                self.exit_program(1, f"Failed to create foreign key {fk_name}")
             else:
                 logger.warning(f"Skipping discovered foreign key")
     
@@ -3088,8 +3144,7 @@ class ReplicationManager:
             logger.error("FATAL: invalid transformations - no point in continuing")
             print("\ninvalid transformations - check your spelling, capitals and spaces")
             print("\nFATAL: invalid transformations - no point in continuing")
-            self.close_connections()
-            sys.exit(1)
+            self.exit_program(1, "Invalid transformations")
 
         self.get_foreign_keys()
         table_names = self.get_all_tables_to_process()
@@ -3149,6 +3204,7 @@ class ReplicationManager:
             if self.verbose:
                 print("MS Access connection: SUCCESS")
             self.dao_conn.Close()
+            self.dao_conn = None
         except Exception as e:
             logger.error(f"MS Access connection: FAILED - {e}")
             if self.verbose:
@@ -3161,6 +3217,8 @@ class ReplicationManager:
             if self.verbose:
                 print("PostgreSQL connection: SUCCESS")
             self.pg_conn.close()
+            self.pg_conn = None
+            self.pg_cursor = None
         except Exception as e:
             logger.error(f"PostgreSQL connection: FAILED - {e}")
             if self.verbose:
@@ -3240,11 +3298,7 @@ class ReplicationManager:
             frame = inspect.currentframe()
             logger.info(f"Line {frame.f_lineno} - exit_and_cleanup called")
         
-        try:
-            self.close_connections()
-        except:
-            pass
-        print("\nReplication processing completed - successful")
+        self.exit_program(0)
 
     def generate_yaml_file(self):
         frame_lineno = inspect.currentframe().f_lineno
@@ -3352,6 +3406,9 @@ class ReplicationManager:
 # ============================================================================
 
 def main():
+    # Log version at the very start of program execution
+    logger.info(f"pg_replicator.py version {__version__} starting")
+    
     parser = argparse.ArgumentParser(description='MS Access to PostgreSQL Replication Tool')
     parser.add_argument('-V', '--version', action='store_true', help='Show version and exit')
     parser.add_argument('-c', '--config', default='replicatorconfig.yaml', help='Path to configuration file')
@@ -3370,7 +3427,7 @@ def main():
     parser.add_argument('--sync-deleted', action='store_true',
                         help='Synchronize deleted records from Access to PostgreSQL')
     parser.add_argument('--slow', action='store_true',
-                        help='Use slower processing; disables nonvolatile optimization (can be used with or without --sync-deleted)')
+                        help='Use slower processing; disables nonvolatile optimization and dependency resolution (can be used with or without --sync-deleted)')
     parser.add_argument('--nonvolatile', action='store_true',
                         help='Skip copying non-volatile tables when row counts match (unless --slow is also enabled)')
     
@@ -3512,11 +3569,14 @@ def main():
             manager.replicate_tables()
             manager.exit_and_cleanup()
     except Exception as e:
-        logger.error(f"Replication processing completed - with errors: {e}")
-        if manager.verbose:
-            print(f"Replication processing completed - with errors: {e}")
-        traceback.print_exc()
-        sys.exit(1)
+        if manager:
+            manager.exit_program(1, str(e))
+        else:
+            # Manager not created yet - fallback
+            logger.error(f"Replication processing failed: {e}")
+            print(f"Replication processing failed: {e}")
+            traceback.print_exc()
+            sys.exit(1)
 
 
 if __name__ == "__main__":
