@@ -1,6 +1,6 @@
 # MS Access Replicator
 
-A Python tool for replicating Microsoft Access databases to PostgreSQ.
+A Python tool for replicating Microsoft Access databases to PostgreSQL
 or MS SQL Server
 
 ## Description
@@ -51,7 +51,7 @@ This replicator is a bare bones equivalent of MS SQL Server Migration
 Assistant for a target PostgreSQL database or MS SQL database, which is then accessible
 from many AI integration platforms.
 
-However is the intended use not the same.
+However the intended use is not the same.
 
 The replicator is just a normal program. But its functions allow you to easily maintain a replica of your data in a database system that is much better (directly) supported in a wide range of AI platforms.
 
