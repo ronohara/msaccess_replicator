@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__version__ = "$Revision: 1.10 $"
+__version__ = "$Revision: 1.11 $"
 
 import sys
 import os
@@ -179,6 +179,44 @@ class ReplicationManager:
         if self.trace:
             frame = inspect.currentframe()
             logger.info(f"Line {frame.f_lineno} - __init__ called")
+    
+    # ========================================================================
+    # EXIT PROGRAM (CENTRALIZED SHUTDOWN)
+    # ========================================================================
+    
+    def exit_program(self, exit_code=0, error_msg=None):
+        """Centralized program exit with connection cleanup and logging.
+        
+        Args:
+            exit_code: 0 for success, non-zero for error
+            error_msg: Optional error message to log before exit
+        """
+        if self.trace:
+            frame = inspect.currentframe()
+            logger.info(f"Line {frame.f_lineno} - exit_program called with exit_code={exit_code}, error_msg={error_msg}")
+        
+        # Close connections if they are open
+        try:
+            self.close_connections()
+        except Exception as e:
+            logger.warning(f"Error during connection cleanup: {e}")
+        
+        # Generate termination message
+        if exit_code == 0:
+            msg = f"ms_replicator.py version {__version__} terminated successfully"
+            logger.info(msg)
+            if self.verbose:
+                print(msg)
+        else:
+            if error_msg:
+                msg = f"ms_replicator.py version {__version__} terminated with errors: {error_msg}"
+            else:
+                msg = f"ms_replicator.py version {__version__} terminated with errors (exit code {exit_code})"
+            logger.error(msg)
+            if self.verbose:
+                print(msg)
+        
+        sys.exit(exit_code)
     
     # ========================================================================
     # SYSTEM TABLE IDENTIFICATION
@@ -681,12 +719,12 @@ class ReplicationManager:
         
         try:
             unquoted_name = safe_table_name.strip('[]')
-            check_sql = """
+            check_sql = f"""
                 SELECT COUNT(*) FROM information_schema.tables 
                 WHERE table_schema = 'dbo' 
-                AND table_name = %s
+                AND table_name = '{escape_sqlserver_string(unquoted_name)}'
             """
-            self.ss_cursor.execute(check_sql, (unquoted_name,))
+            self.ss_cursor.execute(check_sql)
             count = self.ss_cursor.fetchone()[0]
             return count > 0
         except Exception as e:
@@ -707,11 +745,14 @@ class ReplicationManager:
             return False
         
         quoted_key_columns = [self.sanitise_token_for_sqlserver(col) for col in key_columns]
-        where_clause = ' AND '.join([f"{col} = %s" for col in quoted_key_columns])
+        where_parts = []
+        for col, val in zip(quoted_key_columns, key_values):
+            where_parts.append(f"{col} = {convert_dao_value_to_sqlserver_literal(val)}")
+        where_clause = ' AND '.join(where_parts)
         check_sql = f"SELECT COUNT(*) FROM {safe_table_name} WHERE {where_clause}"
         
         try:
-            result = self.ss_sql_execute(check_sql, fetch_one=True, params=key_values)
+            result = self.ss_sql_execute(check_sql, fetch_one=True)
             return result[0] > 0 if result else False
         except Exception as e:
             logger.warning(f"Error checking row existence: {e}")
@@ -1074,17 +1115,16 @@ class ReplicationManager:
                         logger.debug(f"Failed to insert row with NULL key: {e}")
                     return 0, 'ERROR', key_str
         else:
-            # No NULL keys - use MERGE with proper syntax
+            # No NULL keys - use MERGE with string concatenation
             col_list = ', '.join(columns)
-            source_placeholders = ', '.join(['%s'] * len(columns))
+            source_values = ', '.join([convert_dao_value_to_sqlserver_literal(val) for val in row_data])
             update_set = ', '.join([f"target.{col} = source.{col}" for col in columns])
-            # IMPORTANT: Use source. prefix for the insert values
             insert_values = ', '.join([f"source.{col}" for col in columns])
             key_match = ' AND '.join([f"target.{col} = source.{col}" for col in key_columns])
             
             merge_sql = f"""
                 MERGE INTO {safe_table_name} AS target
-                USING (SELECT {source_placeholders}) AS source ({col_list})
+                USING (SELECT {source_values}) AS source ({col_list})
                 ON ({key_match})
                 WHEN MATCHED THEN
                     UPDATE SET {update_set}
@@ -1093,7 +1133,7 @@ class ReplicationManager:
             """
             
             try:
-                self.ss_cursor.execute(merge_sql, tuple(row_data))
+                self.ss_cursor.execute(merge_sql)
                 self.ss_conn.commit()
                 return 1, 'SUCCESS', key_str
             except Exception as e:
@@ -1484,19 +1524,40 @@ class ReplicationManager:
             frame = inspect.currentframe()
             logger.info(f"Line {frame.f_lineno} - close_connections called")
         
+        # Close SQL Server cursor
         if self.ss_cursor:
-            self.ss_cursor.close()
+            try:
+                self.ss_cursor.close()
+            except Exception as e:
+                if self.debug:
+                    logger.debug(f"Error closing ss_cursor: {e}")
+            self.ss_cursor = None
+        
+        # Close SQL Server connection
         if self.ss_conn:
-            self.ss_conn.close()
+            try:
+                self.ss_conn.close()
+            except Exception as e:
+                if self.debug:
+                    logger.debug(f"Error closing ss_conn: {e}")
+            self.ss_conn = None
+        
+        # Close DAO connection
         if self.dao_conn:
-            self.dao_conn.Close()
+            try:
+                self.dao_conn.Close()
+            except Exception as e:
+                if self.debug:
+                    logger.debug(f"Error closing DAO connection: {e}")
+            self.dao_conn = None
+        
         logger.info("Connections closed")
     
     # ========================================================================
     # SQL EXECUTION
     # ========================================================================
     
-    def ss_sql_execute(self, sql, fetch_one=False, fetch_all=False, params=None):
+    def ss_sql_execute(self, sql, fetch_one=False, fetch_all=False):
         if self.trace:
             frame = inspect.currentframe()
             sql_preview = sql[:500] + "..." if len(sql) > 500 else sql
@@ -1509,10 +1570,7 @@ class ReplicationManager:
             logger.debug(f"Executing SQL: {safe_sql[:500]}")
         
         try:
-            if params:
-                self.ss_cursor.execute(sql, params)
-            else:
-                self.ss_cursor.execute(sql)
+            self.ss_cursor.execute(sql)
             if fetch_one:
                 return self.ss_cursor.fetchone()
             if fetch_all:
@@ -1551,7 +1609,7 @@ class ReplicationManager:
             
             if not has_attributes and not has_primary and not has_unique:
                 logger.error(f"FATAL: Index '{idx.Name}' has no properties")
-                sys.exit(1)
+                self.exit_program(1, "Index has no properties")
             
             if has_attributes:
                 attrs = idx.Attributes
@@ -1698,7 +1756,7 @@ class ReplicationManager:
         unquoted_table_name = safe_table_name.strip('[]')
         columns_lower = [col.lower().strip('[]') for col in columns]
         
-        pk_columns_sql = """
+        pk_columns_sql = f"""
             SELECT LOWER(c.name)
             FROM sys.indexes i
             JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
@@ -1706,11 +1764,11 @@ class ReplicationManager:
             JOIN sys.tables t ON i.object_id = t.object_id
             JOIN sys.schemas s ON t.schema_id = s.schema_id
             WHERE s.name = 'dbo'
-            AND t.name = %s
+            AND t.name = '{escape_sqlserver_string(unquoted_table_name)}'
             AND i.is_primary_key = 1
             ORDER BY ic.key_ordinal
         """
-        pk_columns = self.ss_sql_execute(pk_columns_sql, fetch_all=True, params=(unquoted_table_name,))
+        pk_columns = self.ss_sql_execute(pk_columns_sql, fetch_all=True)
         pk_column_names = [row[0] for row in pk_columns] if pk_columns else []
         return set(columns_lower) == set(pk_column_names)
     
@@ -1725,30 +1783,30 @@ class ReplicationManager:
         unquoted_table_name = safe_table_name.strip('[]')
         columns_lower = [col.lower().strip('[]') for col in columns]
         
-        unique_check_sql = """
+        unique_check_sql = f"""
             SELECT i.name
             FROM sys.indexes i
             JOIN sys.tables t ON i.object_id = t.object_id
             JOIN sys.schemas s ON t.schema_id = s.schema_id
             WHERE s.name = 'dbo'
-            AND t.name = %s
+            AND t.name = '{escape_sqlserver_string(unquoted_table_name)}'
             AND i.is_unique = 1
             AND i.is_primary_key = 0
         """
-        unique_indexes = self.ss_sql_execute(unique_check_sql, fetch_all=True, params=(unquoted_table_name,))
+        unique_indexes = self.ss_sql_execute(unique_check_sql, fetch_all=True)
         
         for idx_row in unique_indexes or []:
             idx_name = idx_row[0]
             # Get columns for this unique index
-            index_cols_sql = """
+            index_cols_sql = f"""
                 SELECT LOWER(c.name)
                 FROM sys.indexes i
                 JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
                 JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-                WHERE i.name = %s
+                WHERE i.name = '{escape_sqlserver_string(idx_name)}'
                 ORDER BY ic.key_ordinal
             """
-            index_columns = self.ss_sql_execute(index_cols_sql, fetch_all=True, params=(idx_name,))
+            index_columns = self.ss_sql_execute(index_cols_sql, fetch_all=True)
             index_col_names = [row[0] for row in index_columns] if index_columns else []
             if set(columns_lower) == set(index_col_names):
                 return True
@@ -1856,7 +1914,7 @@ class ReplicationManager:
         columns_lower = [col.lower().strip('[]') for col in reference_columns]
         
         # Check for PRIMARY KEY
-        pk_sql = """
+        pk_sql = f"""
             SELECT LOWER(c.name), i.name
             FROM sys.indexes i
             JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
@@ -1864,11 +1922,11 @@ class ReplicationManager:
             JOIN sys.tables t ON i.object_id = t.object_id
             JOIN sys.schemas s ON t.schema_id = s.schema_id
             WHERE s.name = 'dbo'
-            AND t.name = %s
+            AND t.name = '{escape_sqlserver_string(unquoted_table)}'
             AND i.is_primary_key = 1
             ORDER BY ic.key_ordinal
         """
-        pk_columns = self.ss_sql_execute(pk_sql, fetch_all=True, params=(unquoted_table,))
+        pk_columns = self.ss_sql_execute(pk_sql, fetch_all=True)
         if pk_columns:
             pk_col_names = [row[0] for row in pk_columns]
             pk_constraint_name = pk_columns[0][1] if pk_columns else None
@@ -1877,30 +1935,30 @@ class ReplicationManager:
                 return (True, 'PRIMARY KEY', pk_constraint_name)
         
         # Check for UNIQUE constraint/index
-        unique_sql = """
+        unique_sql = f"""
             SELECT i.name
             FROM sys.indexes i
             JOIN sys.tables t ON i.object_id = t.object_id
             JOIN sys.schemas s ON t.schema_id = s.schema_id
             WHERE s.name = 'dbo'
-            AND t.name = %s
+            AND t.name = '{escape_sqlserver_string(unquoted_table)}'
             AND i.is_unique = 1
             AND i.is_primary_key = 0
         """
-        unique_constraints = self.ss_sql_execute(unique_sql, fetch_all=True, params=(unquoted_table,))
+        unique_constraints = self.ss_sql_execute(unique_sql, fetch_all=True)
         
         for idx_row in unique_constraints or []:
             idx_name = idx_row[0]
             # Get columns for this unique index
-            index_cols_sql = """
+            index_cols_sql = f"""
                 SELECT LOWER(c.name)
                 FROM sys.indexes i
                 JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
                 JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-                WHERE i.name = %s
+                WHERE i.name = '{escape_sqlserver_string(idx_name)}'
                 ORDER BY ic.key_ordinal
             """
-            index_columns = self.ss_sql_execute(index_cols_sql, fetch_all=True, params=(idx_name,))
+            index_columns = self.ss_sql_execute(index_cols_sql, fetch_all=True)
             index_col_names = [row[0] for row in index_columns] if index_columns else []
             if set(columns_lower) == set(index_col_names):
                 logger.info(f"Reference table {reference_table} has UNIQUE constraint/index {idx_name} on {reference_columns}")
@@ -1950,16 +2008,16 @@ class ReplicationManager:
         constraint_name = self.sanitise_keyname_for_sqlserver(f"pk_{fk_name}")
         
         # Check if a PRIMARY KEY constraint already exists with this name
-        check_sql = """
+        check_sql = f"""
             SELECT 1 FROM sys.indexes i
             JOIN sys.tables t ON i.object_id = t.object_id
             JOIN sys.schemas s ON t.schema_id = s.schema_id
             WHERE s.name = 'dbo'
-            AND t.name = %s
-            AND i.name = %s
+            AND t.name = '{escape_sqlserver_string(base_table)}'
+            AND i.name = '{escape_sqlserver_string(constraint_name)}'
             AND i.is_primary_key = 1
         """
-        exists = self.ss_sql_execute(check_sql, fetch_one=True, params=(base_table, constraint_name))
+        exists = self.ss_sql_execute(check_sql, fetch_one=True)
         if exists:
             logger.info(f"PRIMARY KEY constraint {constraint_name} already exists on {base_table}")
             return constraint_name
@@ -2308,7 +2366,7 @@ class ReplicationManager:
         
         # First, try to find PRIMARY KEY using SQL Server system views
         unquoted_table = safe_table_name.strip('[]')
-        pk_sql = """
+        pk_sql = f"""
             SELECT LOWER(c.name)
             FROM sys.indexes i
             JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
@@ -2316,11 +2374,11 @@ class ReplicationManager:
             JOIN sys.tables t ON i.object_id = t.object_id
             JOIN sys.schemas s ON t.schema_id = s.schema_id
             WHERE s.name = 'dbo'
-            AND t.name = %s
+            AND t.name = '{escape_sqlserver_string(unquoted_table)}'
             AND i.is_primary_key = 1
             ORDER BY ic.key_ordinal
         """
-        pk_columns = self.ss_sql_execute(pk_sql, fetch_all=True, params=(unquoted_table,))
+        pk_columns = self.ss_sql_execute(pk_sql, fetch_all=True)
         
         if pk_columns:
             key_columns = [row[0] for row in pk_columns]
@@ -2328,30 +2386,30 @@ class ReplicationManager:
             logger.info(f"_sync_deleted_table: {table_name} using PRIMARY KEY: {', '.join(key_columns)}")
         else:
             # No PRIMARY KEY - look for first UNIQUE constraint/index
-            unique_sql = """
+            unique_sql = f"""
                 SELECT i.name
                 FROM sys.indexes i
                 JOIN sys.tables t ON i.object_id = t.object_id
                 JOIN sys.schemas s ON t.schema_id = s.schema_id
                 WHERE s.name = 'dbo'
-                AND t.name = %s
+                AND t.name = '{escape_sqlserver_string(unquoted_table)}'
                 AND i.is_unique = 1
                 AND i.is_primary_key = 0
             """
-            unique_indexes = self.ss_sql_execute(unique_sql, fetch_all=True, params=(unquoted_table,))
+            unique_indexes = self.ss_sql_execute(unique_sql, fetch_all=True)
             
             if unique_indexes:
                 # Get the first unique index's columns
                 idx_name = unique_indexes[0][0]
-                idx_cols_sql = """
+                idx_cols_sql = f"""
                     SELECT LOWER(c.name)
                     FROM sys.indexes i
                     JOIN sys.index_columns ic ON i.object_id = ic.object_id AND i.index_id = ic.index_id
                     JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-                    WHERE i.name = %s
+                    WHERE i.name = '{escape_sqlserver_string(idx_name)}'
                     ORDER BY ic.key_ordinal
                 """
-                idx_columns = self.ss_sql_execute(idx_cols_sql, fetch_all=True, params=(idx_name,))
+                idx_columns = self.ss_sql_execute(idx_cols_sql, fetch_all=True)
                 if idx_columns:
                     key_columns = [row[0] for row in idx_columns]
                     key_column_names = [self.sanitise_token_for_sqlserver(col) for col in key_columns]
@@ -2387,14 +2445,14 @@ class ReplicationManager:
             return
         
         # Step 2: Get all column names for SELECT
-        columns_sql = """
+        columns_sql = f"""
             SELECT column_name
             FROM information_schema.columns
             WHERE table_schema = 'dbo'
-            AND table_name = %s
+            AND table_name = '{escape_sqlserver_string(unquoted_table)}'
             ORDER BY ordinal_position
         """
-        all_columns = self.ss_sql_execute(columns_sql, fetch_all=True, params=(unquoted_table,))
+        all_columns = self.ss_sql_execute(columns_sql, fetch_all=True)
         all_column_names = [row[0] for row in (all_columns or [])]
         
         if not all_column_names:
@@ -2522,26 +2580,25 @@ class ReplicationManager:
             
             # Delete the collected keys for this batch
             if keys_to_delete:
-                # Delete in sub-batches if needed
+                # Delete in sub-batches if needed (though batch is already limited to batch_size)
                 delete_batch_size = 1000
                 for i in range(0, len(keys_to_delete), delete_batch_size):
                     sub_batch = keys_to_delete[i:i+delete_batch_size]
                     
-                    # Build parameterised DELETE query with quoted key columns
-                    quoted_key_columns = [self.sanitise_token_for_sqlserver(col) for col in key_columns]
-                    row_placeholders = []
-                    flat_values = []
+                    # Build string concatenation DELETE query with quoted key columns
+                    quoted_key_columns_list = [self.sanitise_token_for_sqlserver(col) for col in key_columns]
+                    row_value_lists = []
                     for pk_tuple in sub_batch:
-                        row_placeholders.append(f"({','.join(['%s'] * len(key_columns))})")
-                        flat_values.extend(pk_tuple)
+                        value_literals = [convert_dao_value_to_sqlserver_literal(v) for v in pk_tuple]
+                        row_value_lists.append(f"({', '.join(value_literals)})")
                     
                     delete_sql = f"""
                         DELETE FROM {safe_table_name}
-                        WHERE ({', '.join(quoted_key_columns)}) IN ({', '.join(row_placeholders)})
+                        WHERE ({', '.join(quoted_key_columns_list)}) IN ({', '.join(row_value_lists)})
                     """
                     
                     try:
-                        self.ss_cursor.execute(delete_sql, flat_values)
+                        self.ss_cursor.execute(delete_sql)
                         total_deleted += len(sub_batch)
                     except Exception as e:
                         logger.error(f"_sync_deleted_table: Failed to delete batch from {table_name}: {e}")
@@ -2677,7 +2734,7 @@ class ReplicationManager:
                 logger.error(f"  Relation name: '{rel_name}'")
                 logger.error(f"  This indicates a corrupted or empty relation in MS Access")
                 logger.error(f"  Please check the MS Access database relationships")
-                sys.exit(1)
+                self.exit_program(1, "Relation has Fields.Count = 0")
             
             # MS Access: rel.Table = child (FK side), rel.ForeignTable = parent (referenced)
             child_table = decode_sketchy_utf16(rel.Table)
@@ -2715,7 +2772,7 @@ class ReplicationManager:
             if self.is_table_excluded(base_table):
                 logger.error(f"FATAL: Foreign key '{fk_name}' has base_table '{base_table}' in excluded list")
                 logger.error(f"  Cannot create foreign key on excluded table")
-                sys.exit(1)
+                self.exit_program(1, f"Cannot create foreign key on excluded table {base_table}")
             
             # Skip if child table is a system table
             if self.is_system_table_name(base_table):
@@ -2752,7 +2809,7 @@ class ReplicationManager:
                     logger.error(f"  Foreign key name: {fk_name}")
                     logger.error(f"  Configured: {fk_info['base_table']}({fk_info['base_columns']}) -> {fk_info['reference_table']}({fk_info['reference_columns']})")
                     logger.error(f"  Discovered: {discovered_info['base_table']}({discovered_info['base_columns']}) -> {discovered_info['reference_table']}({discovered_info['reference_columns']})")
-                    sys.exit(1)
+                    self.exit_program(1, "Foreign key name collision with different definition")
         
         logger.info(f"Discovered {len(filtered_fkeys)} foreign keys from MS Access (after exclusion and system table filtering)")
         logger.info(f"Configured {len(self.original_configured_fkeys)} foreign keys from YAML")
@@ -2871,15 +2928,15 @@ class ReplicationManager:
                 safe_idx_name = self.normalise_index_name(table_info['name'], idx['name'])
                 
                 # Check if index already exists in SQL Server
-                check_sql = """
+                check_sql = f"""
                     SELECT 1 FROM sys.indexes i
                     JOIN sys.tables t ON i.object_id = t.object_id
                     JOIN sys.schemas s ON t.schema_id = s.schema_id
                     WHERE s.name = 'dbo'
-                    AND t.name = %s
-                    AND i.name = %s
+                    AND t.name = '{escape_sqlserver_string(table_info['name'])}'
+                    AND i.name = '{escape_sqlserver_string(safe_idx_name)}'
                 """
-                exists = self.ss_sql_execute(check_sql, fetch_one=True, params=(table_info['name'], safe_idx_name))
+                exists = self.ss_sql_execute(check_sql, fetch_one=True)
                 
                 if exists:
                     logger.info(f"Index {idx['name']} on table {table_info['name']} already exists - skipping")
@@ -2967,7 +3024,7 @@ class ReplicationManager:
                     logger.warning(f"Cannot add uniqueness constraint to system table '{base_table}' - skipping foreign key")
                     if is_from_config:
                         logger.error(f"FATAL: Foreign key from CONFIGURATION FILE references system table")
-                        sys.exit(1)
+                        self.exit_program(1, "Foreign key from CONFIGURATION FILE references system table")
                     return
                 try:
                     constraint_name = self.ensure_uniqueness_on_base_table(base_table, base_columns, fk_name)
@@ -2978,7 +3035,7 @@ class ReplicationManager:
                     logger.error(f"Failed to automatically add uniqueness constraint for foreign key '{fk_name}': {e}")
                     if is_from_config:
                         logger.error(f"FATAL: Foreign key from CONFIGURATION FILE cannot be created")
-                        sys.exit(1)
+                        self.exit_program(1, f"Failed to create foreign key {fk_name} from configuration")
                     else:
                         logger.warning(f"Skipping foreign key from MS Access discovery")
                         return
@@ -3003,16 +3060,16 @@ class ReplicationManager:
         safe_ref_table = self.sanitise_token_for_sqlserver(reference_table)
         
         # Check if foreign key already exists in SQL Server
-        check_sql = """
+        check_sql = f"""
             SELECT 1
             FROM sys.foreign_keys fk
             JOIN sys.tables t ON fk.parent_object_id = t.object_id
             JOIN sys.schemas s ON t.schema_id = s.schema_id
             WHERE s.name = 'dbo'
-            AND t.name = %s
-            AND fk.name = %s
+            AND t.name = '{escape_sqlserver_string(base_table)}'
+            AND fk.name = '{escape_sqlserver_string(safe_fk_name)}'
         """
-        existing = self.ss_sql_execute(check_sql, fetch_one=True, params=(base_table, safe_fk_name))
+        existing = self.ss_sql_execute(check_sql, fetch_one=True)
         
         if existing:
             logger.info(f"Foreign key {fk_name} already exists on table {base_table} - skipping creation")
@@ -3048,7 +3105,7 @@ class ReplicationManager:
             self.ss_conn.rollback()
             logger.error(f"Failed to create foreign key {fk_name}: {e}")
             if is_from_config:
-                sys.exit(1)
+                self.exit_program(1, f"Failed to create foreign key {fk_name}")
             else:
                 logger.warning(f"Skipping discovered foreign key")
     
@@ -3176,7 +3233,7 @@ class ReplicationManager:
         # SQL Server doesn't have IF EXISTS for DROP DATABASE in older versions
         # Use dynamic SQL to check existence
         admin_cursor.execute(f"""
-            IF EXISTS (SELECT 1 FROM sys.databases WHERE name = '{dbname}')
+            IF EXISTS (SELECT 1 FROM sys.databases WHERE name = '{escape_sqlserver_string(dbname)}')
             BEGIN
                 ALTER DATABASE [{dbname}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE
                 DROP DATABASE [{dbname}]
@@ -3225,8 +3282,7 @@ class ReplicationManager:
             logger.error("FATAL: invalid transformations - no point in continuing")
             print("\ninvalid transformations - check your spelling, capitals and spaces")
             print("\nFATAL: invalid transformations - no point in continuing")
-            self.close_connections()
-            sys.exit(1)
+            self.exit_program(1, "Invalid transformations")
 
         self.get_foreign_keys()
         table_names = self.get_all_tables_to_process()
@@ -3288,6 +3344,7 @@ class ReplicationManager:
             if self.verbose:
                 print("MS Access connection: SUCCESS")
             self.dao_conn.Close()
+            self.dao_conn = None
         except Exception as e:
             logger.error(f"MS Access connection: FAILED - {e}")
             if self.verbose:
@@ -3300,6 +3357,8 @@ class ReplicationManager:
             if self.verbose:
                 print("SQL Server connection: SUCCESS")
             self.ss_conn.close()
+            self.ss_conn = None
+            self.ss_cursor = None
         except Exception as e:
             logger.error(f"SQL Server connection: FAILED - {e}")
             if self.verbose:
@@ -3379,11 +3438,7 @@ class ReplicationManager:
             frame = inspect.currentframe()
             logger.info(f"Line {frame.f_lineno} - exit_and_cleanup called")
         
-        try:
-            self.close_connections()
-        except:
-            pass
-        print("\nReplication processing completed - successful")
+        self.exit_program(0)
 
     def generate_yaml_file(self):
         frame_lineno = inspect.currentframe().f_lineno
@@ -3491,6 +3546,9 @@ class ReplicationManager:
 # ============================================================================
 
 def main():
+    # Log version at the very start of program execution
+    logger.info(f"ms_replicator.py version {__version__} starting")
+    
     parser = argparse.ArgumentParser(description='MS Access to SQL Server Replication Tool')
     parser.add_argument('-V', '--version', action='store_true', help='Show version and exit')
     parser.add_argument('-c', '--config', default='ms_replicatorconfig.yaml', help='Path to configuration file')
@@ -3651,11 +3709,14 @@ def main():
             manager.replicate_tables()
             manager.exit_and_cleanup()
     except Exception as e:
-        logger.error(f"Replication processing completed - with errors: {e}")
-        if manager.verbose:
-            print(f"Replication processing completed - with errors: {e}")
-        traceback.print_exc()
-        sys.exit(1)
+        if manager:
+            manager.exit_program(1, str(e))
+        else:
+            # Manager not created yet - fallback
+            logger.error(f"Replication processing failed: {e}")
+            print(f"Replication processing failed: {e}")
+            traceback.print_exc()
+            sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,44 @@
 # MS SQL Server Replicator - Changelog
 
+## Version 1.11 (2026-05-28)
+
+**Added:**
+- `exit_program()` centralized shutdown method with connection cleanup and logging
+- Log entry at program start recording version number
+- Defensive exception handling in `close_connections()` for each connection type
+- Connection handles set to None after closing in `close_connections()` and `test_network_connections()`
+
+**Changed:**
+- All `sys.exit(1)` calls replaced with `self.exit_program(1, error_msg)` for consistent shutdown handling
+- `exit_and_cleanup()` simplified to call `exit_program(0)` instead of inline cleanup
+- Main exception handler now uses `manager.exit_program()` when manager exists, with fallback for pre-manager errors
+- `table_exists_in_sqlserver()` now uses string concatenation instead of parameterized queries
+- `row_exists_in_sqlserver()` now uses string concatenation instead of parameterized queries
+- `check_primary_key()` now uses string concatenation instead of parameterized queries
+- `check_unique_constraint_only()` now uses string concatenation instead of parameterized queries
+- `check_reference_table_has_uniqueness()` now uses string concatenation instead of parameterized queries
+- `_sync_deleted_table()` SELECT and DELETE queries now use string concatenation instead of parameterized queries
+- `create_all_indexes()` existence check now uses string concatenation instead of parameterized queries
+- `create_foreign_key()` existence check now uses string concatenation instead of parameterized queries
+- `merge_row()` MERGE statement now uses string concatenation instead of parameterized queries
+- `replicate_schema()` database creation now uses string concatenation with proper escaping
+- `ss_sql_execute()` method signature simplified (removed `params` parameter)
+
+**Fixed:**
+- Connection cleanup now occurs consistently on all exit paths
+- Error messages now properly logged before program termination in all scenarios
+- DAO connection warning "Object invalid or no longer set" now handled gracefully (logged at debug level)
+- Connection handles now properly set to None after closing to prevent double-close attempts
+
+**Why:**
+- Centralized exit logic ensures connections are always closed properly regardless of how the program terminates
+- Consistent logging of termination messages (success or error) for audit trail
+- Prevents resource leaks from early exits that bypassed connection cleanup
+- Provides unified error reporting format across all failure points
+- String concatenation for SQL queries provides more reliable execution in edge cases (aligned with pg_replicator strategy)
+
+---
+
 ## Version 1.10 (2026-05-27)
 
 **Added:**
@@ -27,7 +66,7 @@
 - `None` handling in `get_all_tables_to_process()` - converts `None` to empty list when `tables:` section exists but is empty
 - `None` handling in `copy_table()` - converts `None` to empty list when `nonvolatile:` section exists but is empty
 - `None` handling in `generate_yaml_file()` - converts `None` to empty list for both `tables` and `nonvolatile` sections
-- Error when `tables:` entry exists but is `None` (empty YAML section) causing `TypeError: 'NoneType' object is not iterable`
+- Error when `tables:` entry exists but is `None` (empty YAML section) causing type error
 
 **Changed:**
 - Auto-discovered tables are now included in generated YAML when `tables:` section is missing or `None`
@@ -39,12 +78,12 @@
 **Added:**
 - Total elapsed runtime display at program completion (HH:MM:SS format, matching table-level output)
 - `program_start_time` attribute to track overall execution time
-- SLOW MODE now overrides nonvolatile optimization (copies tables even when row counts match)
+- Slow mode now overrides nonvolatile optimization (copies tables even when row counts match)
 
 **Changed:**
 - `--slow` option no longer restricted to `--sync-deleted` only
 - Non-volatile tables are now copied when `--slow` is enabled, regardless of row count match
-- Added diagnostic messages for SLOW MODE: "SLOW MODE: copying anyway (optimization disabled for debugging)"
+- Added diagnostic messages for slow mode: "SLOW MODE: copying anyway (optimization disabled for debugging)"
 - Added "SLOW MODE enabled - full sync" suffix to table sync messages
 - Updated command line help text for `--slow` and `--nonvolatile` options
 
@@ -55,12 +94,12 @@
 
 **Added:**
 - Filtered unique index support for nullable columns
-- Detection of nullable columns when creating UNIQUE indexes
-- Automatic creation of filtered unique indexes (`WHERE column IS NOT NULL`) when all columns in a unique index are nullable
+- Detection of nullable columns when creating unique indexes
+- Automatic creation of filtered unique indexes (WHERE column IS NOT NULL) when all columns in a unique index are nullable
 - Logging to indicate when filtered unique indexes are created
 
 **Changed:**
-- UNIQUE indexes on nullable columns now use filtered index syntax
+- Unique indexes on nullable columns now use filtered index syntax
 - Multiple NULL values are now allowed in unique indexes (matches MS Access behavior)
 - Uniqueness is still enforced for non-NULL values
 
@@ -75,14 +114,14 @@
 - Indentation error in `copy_table()` method that caused syntax errors
 
 **Changed:**
-- Modified `_create_unique_constraint_on_base_table()` to no longer create unnecessary UNIQUE constraints on child tables
+- Modified `_create_unique_constraint_on_base_table()` to no longer create unnecessary unique constraints on child tables
 - Modified `ensure_uniqueness_on_base_table()` to skip automatic creation of unique constraints on child side of foreign keys
 - Added warning logs when unique constraint creation is skipped
 - Added documentation explaining that SQL Server does not require uniqueness on the child side of foreign keys
 
 **Why:**
 - SQL Server does not require the child side of a foreign key to be unique
-- Auto-created UNIQUE constraints on nullable foreign key columns were causing replication failures (multiple NULLs rejected)
+- Auto-created unique constraints on nullable foreign key columns were causing replication failures (multiple NULLs rejected)
 - This fix prevents those failures while maintaining referential integrity
 
 ## Version 1.5 (2026-05-25)
@@ -90,21 +129,21 @@
 **Added:**
 - `row_exists_in_sqlserver()` method to check if a row exists by its key columns
 - Detailed logging for rejected rows including key values
-- Counters for `duplicate_skipped_count` and `duplicate_rejected_count`
+- Counters for duplicate skipped and duplicate rejected
 
 **Changed:**
-- Enhanced `merge_row()` to return result_type: `SUCCESS`, `DUPLICATE_EXISTS`, `DUPLICATE_REJECTED`, `FK_VIOLATION`, `ERROR`
+- Enhanced `merge_row()` to return result_type: SUCCESS, DUPLICATE_EXISTS, DUPLICATE_REJECTED, FK_VIOLATION, ERROR
 - When duplicate key error occurs, now checks if row actually exists in target
-- Duplicate key error with existing row → `DUPLICATE_EXISTS` (safe skip)
-- Duplicate key error with missing row → `DUPLICATE_REJECTED` (counted as failure, logged as warning)
-- Completion message now shows both `duplicates skipped (exists)` and `duplicates rejected (missing)`
+- Duplicate key error with existing row → DUPLICATE_EXISTS (safe skip)
+- Duplicate key error with missing row → DUPLICATE_REJECTED (counted as failure, logged as warning)
+- Completion message now shows both duplicates skipped (exists) and duplicates rejected (missing)
 - Validation summary now written to log file (previously only console)
 
 ## Version 1.4 (2026-05-25)
 
 **Added:**
-- Enhanced `merge_row()` return tuple `(inserted, result_type, details)`
-- Counters for `duplicate_skipped_count` and `duplicate_rejected_count`
+- Enhanced `merge_row()` return tuple (inserted, result_type, details)
+- Counters for duplicate skipped and duplicate rejected
 - Validation summary now written to log file
 
 **Changed:**
@@ -114,7 +153,7 @@
 ## Version 1.3 (2026-05-25)
 
 **Fixed:**
-- MERGE statement syntax: added `source.` prefix for INSERT values
+- MERGE statement syntax: added source. prefix for INSERT values
 - NULL key handling: rows with NULL keys now use INSERT instead of MERGE
 - Duplicate key detection (error 2601) now handled gracefully
 
@@ -124,8 +163,8 @@
 ## Version 1.2 (2026-05-25)
 
 **Fixed:**
-- Data type mapping for `dbText` fields now uses `NVARCHAR(255)` or field-specific size instead of `NVARCHAR(MAX)`
-- Index compatibility check added to skip indexes on `MAX` types (`NVARCHAR(MAX)`, `VARBINARY(MAX)`) and incompatible types (`TEXT`, `NTEXT`, `IMAGE`, `XML`)
+- Data type mapping for dbText fields now uses NVARCHAR(255) or field-specific size instead of NVARCHAR(MAX)
+- Index compatibility check added to skip indexes on MAX types (NVARCHAR(MAX), VARBINARY(MAX)) and incompatible types (TEXT, NTEXT, IMAGE, XML)
 
 **Added:**
 - Warning logs when index creation is skipped due to incompatible column types
@@ -135,7 +174,7 @@
 
 **Added:**
 - `open_sqlserver_connection_master()` method for network testing
-- Connection to `master` database when `--network` flag is specified
+- Connection to master database when `--network` flag is specified
 
 **Changed:**
 - Modified `test_network_connections()` to use `open_sqlserver_connection_master()` instead of `open_sqlserver_connection()`
@@ -144,32 +183,26 @@
 
 **Initial port from PostgreSQL replicator (pg_replicator.py v1.35)**
 
-**Changes made:**
-- Connection library: `psycopg2` → `pymssql`
-- Configuration section: `postgresql:` → `sqlserver:`
-- Command line options: `--thost`, `--tport`, etc. → `--shost`, `--sport`, etc.
-- Identifier quoting: double quotes `"name"` → square brackets `[name]`
-- Data type mappings for SQL Server compatibility:
-  - `TEXT` → `NVARCHAR(MAX)`
-  - `BYTEA` → `VARBINARY(MAX)`
-  - `BOOLEAN` → `BIT`
-  - `TIMESTAMP` → `DATETIME`
-  - `SERIAL` → `IDENTITY`
-  - `UUID` → `UNIQUEIDENTIFIER`
-- UPSERT: `ON CONFLICT ... DO UPDATE` → `MERGE` statement
-- Pagination: `LIMIT` with tuple comparison → `OFFSET ... FETCH NEXT`
-- System catalog queries: `pg_*` tables → `sys.*` views
-- `DROP TABLE CASCADE` → `DROP TABLE` without CASCADE (tables dropped in reverse dependency order)
-- Schema: `public` → `dbo`
-- Log file: `replicator.log` → `ms_replicator.log`
-- Default config file: `replicatorconfig.yaml` → `ms_replicatorconfig.yaml`
+Changes made:
+- Connection library: psycopg2 → pymssql
+- Configuration section: postgresql: → sqlserver:
+- Command line options: --thost, --tport, etc. → --shost, --sport, etc.
+- Identifier quoting: double quotes "name" → square brackets [name]
+- Data type mappings for SQL Server compatibility
+- UPSERT: ON CONFLICT ... DO UPDATE → MERGE statement
+- Pagination: LIMIT with tuple comparison → OFFSET ... FETCH NEXT
+- System catalog queries: pg_* tables → sys.* views
+- DROP TABLE CASCADE → DROP TABLE without CASCADE (tables dropped in reverse dependency order)
+- Schema: public → dbo
+- Log file: replicator.log → ms_replicator.log
+- Default config file: replicatorconfig.yaml → ms_replicatorconfig.yaml
 
-**Features preserved:**
-- `--nonvolatile` optimization
-- `--sync-deleted` deletion synchronization
-- `--slow` mode (originally only for sync-deleted, expanded in v1.8)
-- `--no-auto-index` foreign key handling
-- Transformations (`MMH3`, `yearonly`, `drop`)
+Features preserved:
+- --nonvolatile optimization
+- --sync-deleted deletion synchronization
+- --slow mode (originally only for sync-deleted, expanded in v1.8)
+- --no-auto-index foreign key handling
+- Transformations (MMH3, yearonly, drop)
 - Foreign key discovery from MS Access relationships
 - Validation and reporting
 - Batch processing for deletions
@@ -177,7 +210,7 @@
 
 ---
 
-## Command Line Options Summary (ms_replicator.py)
+## Command Line Options Summary
 
 | Option | Description |
 |--------|-------------|
@@ -193,7 +226,7 @@
 | `--trace` | Enable trace logging to file |
 | `-a, --no-auto-index` | Suppress automatic creation of indexes/constraints for foreign keys |
 | `--sync-deleted` | Synchronize deleted records from Access to SQL Server |
-| `--slow` | Use slower processing; disables nonvolatile optimization and dependency resolution (can be used with or without --sync-deleted) |
+| `--slow` | Use slower processing; disables nonvolatile optimization and dependency resolution |
 | `--nonvolatile` | Skip copying non-volatile tables when row counts match (unless --slow is also enabled) |
 | `-S, --schema` | Drop and recreate database, then replicate schema ONLY |
 | `--adjust-ms-access` | Adjust MS Access schema (add AutoNumber primary key to tables without PK) |
@@ -209,18 +242,17 @@
 ## Version Format
 
 Version numbers follow semantic versioning where practical:
-- **Major** (1.x.x) – Significant changes, potential breaking changes
-- **Minor** (x.1.x) – New features, backward compatible
-- **Patch** (x.x.1) – Bug fixes, backward compatible
+- Major (1.x.x) – Significant changes, potential breaking changes
+- Minor (x.1.x) – New features, backward compatible
+- Patch (x.x.1) – Bug fixes, backward compatible
 
 ## File Locations
 
 | File | Description |
 |------|-------------|
-| `ms_replicator.py` | Main program |
-| `ms_replicator.log` | Runtime log file |
-| `ms_replicatorconfig.yaml` | Configuration file |
-| `ms_changelog.md` | This changelog |
+| ms_replicator.py | Main program |
+| ms_replicator.log | Runtime log file |
+| ms_replicatorconfig.yaml | Configuration file |
 
 ## Version History Summary
 
@@ -237,3 +269,4 @@ Version numbers follow semantic versioning where practical:
 | 1.8 | 2026-05-26 | Extended --slow option, total elapsed time |
 | 1.9 | 2026-05-26 | None handling in configuration sections |
 | 1.10 | 2026-05-27 | Dependency-based sync-deleted processing (parents before children) |
+| 1.11 | 2026-05-28 | Centralized exit handling, string concatenation for SQL, defensive connection cleanup |
