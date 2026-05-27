@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__version__ = "$Revision: 1.37 $"
+__version__ = "$Revision: 1.38 $"
 
 import sys
 import os
@@ -175,6 +175,9 @@ class ReplicationManager:
         
         # Program start time for total elapsed calculation
         self.program_start_time = None
+        
+        # Track scanned tables for sync-deleted dependency resolution
+        self.scanned_tables = set()
         
         if self.trace:
             frame = inspect.currentframe()
@@ -442,6 +445,20 @@ class ReplicationManager:
                 count = recordset.RecordCount
                 recordset.Close()
                 return count
+    
+    def get_postgresql_row_count(self, safe_table_name):
+        """Get row count from PostgreSQL for a table."""
+        if self.trace:
+            frame = inspect.currentframe()
+            logger.info(f"Line {frame.f_lineno} - get_postgresql_row_count called for {safe_table_name}")
+        
+        try:
+            count_sql = f"SELECT COUNT(*) FROM {safe_table_name}"
+            result = self.pg_sql_execute(count_sql, fetch_one=True)
+            return result[0] if result else 0
+        except Exception as e:
+            logger.error(f"Failed to get row count for {safe_table_name}: {e}")
+            return 0
     
     # ========================================================================
     # DATA VALIDATION
@@ -717,6 +734,21 @@ class ReplicationManager:
         except Exception as e:
             logger.warning(f"Error checking row existence: {e}")
             return False
+    
+    def get_parent_tables(self, table_name):
+        """Get the set of parent tables that the given table references via foreign keys."""
+        if self.trace:
+            frame = inspect.currentframe()
+            logger.info(f"Line {frame.f_lineno} - get_parent_tables called for {table_name}")
+        
+        parents = set()
+        fk_config = self.parameters.get('foreignkeys', {})
+        for fk_name, fk_info in fk_config.items():
+            child = fk_info.get('base_table', '')
+            parent = fk_info.get('reference_table', '')
+            if child == table_name:
+                parents.add(parent)
+        return parents
     
     # ========================================================================
     # COLUMN TRANSFORMATION
@@ -1997,7 +2029,11 @@ class ReplicationManager:
     
     def sync_deleted_tables(self, tables_to_process):
         """Synchronize deleted records by comparing row counts between Access and PostgreSQL.
-        If counts differ, call _sync_deleted_table() for that table."""
+        If counts differ, call _sync_deleted_table() for that table.
+        
+        Processes tables in dependency order (parents before children) so that cascade
+        deletions from parent tables can eliminate the need to scan child tables.
+        """
         if self.trace:
             frame = inspect.currentframe()
             logger.info(f"Line {frame.f_lineno} - sync_deleted_tables called with {len(tables_to_process)} tables")
@@ -2009,60 +2045,103 @@ class ReplicationManager:
         if self.slow:
             print("⚠️  SLOW MODE enabled - will process all tables regardless of row counts.")
             logger.info("sync_deleted_tables: slow mode enabled")
-        else:
-            print("Fast mode - will only process tables where row counts differ.")
-            logger.info("sync_deleted_tables: fast mode enabled")
+            # Slow mode: process all tables in original order, no dependency resolution
+            for table_info in tables_to_process:
+                table_name = table_info['name']
+                safe_table_name = table_info['safe_name']
+                access_count = self.get_access_row_count(table_name)
+                pg_count = self.get_postgresql_row_count(safe_table_name)
+                self._sync_deleted_table(table_name, safe_table_name, access_count, pg_count)
+            return
         
+        print("Fast mode - will only process tables where row counts differ.")
+        print("Processing tables in dependency order (parents before children)...")
+        logger.info("sync_deleted_tables: fast mode enabled with dependency resolution")
         print()
         
+        # Reset scanned tables set
+        self.scanned_tables = set()
+        
+        # Build set of all table names for quick parent filtering
+        all_table_names = {t['name'] for t in tables_to_process}
+        
+        MAX_ITERATIONS = 25
         tables_processed = 0
         tables_skipped = 0
         
-        for table_info in tables_to_process:
-            table_name = table_info['name']
-            safe_table_name = table_info['safe_name']
+        for iteration in range(MAX_ITERATIONS):
+            processed_this_round = 0
             
-            # Get row count from MS Access
-            try:
-                access_count = self.get_access_row_count(table_name)
-            except Exception as e:
-                print(f"  ✗ {table_name}: Failed to get Access row count - {e}")
-                logger.error(f"sync_deleted_tables: Failed to get Access count for {table_name} - {e}")
-                continue
+            for table_info in tables_to_process:
+                table_name = table_info['name']
+                safe_table_name = table_info['safe_name']
+                
+                # Skip if already scanned
+                if table_name in self.scanned_tables:
+                    continue
+                
+                # Get parent tables for this table (tables it references via foreign keys)
+                parents = self.get_parent_tables(table_name)
+                
+                # Filter parents to only those that are in our table list
+                # (Parents that are excluded or not in the list don't block processing)
+                relevant_parents = parents.intersection(all_table_names)
+                
+                # Check if all relevant parents have been scanned
+                if relevant_parents and not relevant_parents.issubset(self.scanned_tables):
+                    # Still waiting for parent tables to be scanned
+                    if self.verbose:
+                        logger.debug(f"sync_deleted_tables: {table_name} waiting for parents {relevant_parents - self.scanned_tables}")
+                    continue
+                
+                # Get row counts
+                try:
+                    access_count = self.get_access_row_count(table_name)
+                except Exception as e:
+                    print(f"  ✗ {table_name}: Failed to get Access row count - {e}")
+                    logger.error(f"sync_deleted_tables: Failed to get Access count for {table_name} - {e}")
+                    self.scanned_tables.add(table_name)
+                    continue
+                
+                try:
+                    count_sql = f"SELECT COUNT(*) FROM {safe_table_name}"
+                    result = self.pg_sql_execute(count_sql, fetch_one=True)
+                    pg_count = result[0] if result else 0
+                except Exception as e:
+                    print(f"  ✗ {table_name}: Failed to get PostgreSQL row count - {e}")
+                    logger.error(f"sync_deleted_tables: Failed to get PostgreSQL count for {table_name} - {e}")
+                    self.scanned_tables.add(table_name)
+                    continue
+                
+                # Diagnostic logging to compare copy phase vs sync phase
+                original_validation = self.validation_results.get(table_name, {})
+                logger.info(f"sync_deleted_tables: {table_name} - Copy phase: Access={original_validation.get('source_count')}, PostgreSQL={original_validation.get('target_count')}")
+                logger.info(f"sync_deleted_tables: {table_name} - Current check: Access={access_count}, PostgreSQL={pg_count}")
+                
+                print(f"  {table_name}: Access={access_count}, PostgreSQL={pg_count}")
+                logger.info(f"sync_deleted_tables: {table_name} Access={access_count}, PostgreSQL={pg_count}")
+                
+                # Only process if counts differ
+                if access_count != pg_count:
+                    print(f"    → Counts differ - processing {table_name}")
+                    self._sync_deleted_table(table_name, safe_table_name, access_count, pg_count)
+                    tables_processed += 1
+                else:
+                    print(f"    → Counts match - skipping (no deleted records to sync)")
+                    tables_skipped += 1
+                
+                self.scanned_tables.add(table_name)
+                processed_this_round += 1
             
-            # Get row count from PostgreSQL
-            try:
-                count_sql = f"SELECT COUNT(*) FROM {safe_table_name}"
-                result = self.pg_sql_execute(count_sql, fetch_one=True)
-                pg_count = result[0] if result else 0
-            except Exception as e:
-                print(f"  ✗ {table_name}: Failed to get PostgreSQL row count - {e}")
-                logger.error(f"sync_deleted_tables: Failed to get PostgreSQL count for {table_name} - {e}")
-                continue
-            
-            # Diagnostic logging to compare copy phase vs sync phase
-            original_validation = self.validation_results.get(table_name, {})
-            logger.info(f"sync_deleted_tables: {table_name} - Copy phase: Access={original_validation.get('source_count')}, PostgreSQL={original_validation.get('target_count')}")
-            logger.info(f"sync_deleted_tables: {table_name} - Current check: Access={access_count}, PostgreSQL={pg_count}")
-            
-            print(f"  {table_name}: Access={access_count}, PostgreSQL={pg_count}")
-            logger.info(f"sync_deleted_tables: {table_name} Access={access_count}, PostgreSQL={pg_count}")
-            
-            # Decide whether to process this table
-            if self.slow:
-                # Slow mode: process all tables regardless of counts
-                print(f"    → SLOW MODE: processing {table_name}")
-                self._sync_deleted_table(table_name, safe_table_name, access_count, pg_count)
-                tables_processed += 1
-            elif access_count != pg_count:
-                # Fast mode: only process when counts differ
-                print(f"    → Counts differ - processing {table_name}")
-                self._sync_deleted_table(table_name, safe_table_name, access_count, pg_count)
-                tables_processed += 1
-            else:
-                # Fast mode: counts match, skip
-                print(f"    → Counts match - skipping (no deleted records to sync)")
-                tables_skipped += 1
+            if processed_this_round == 0:
+                # No tables processed this round - check for remaining tables
+                remaining = [t['name'] for t in tables_to_process if t['name'] not in self.scanned_tables]
+                if remaining:
+                    logger.warning(f"Could not process remaining tables due to circular dependencies: {remaining}")
+                    for table_name in remaining:
+                        print(f"  ⚠ {table_name}: Skipped - dependencies not satisfied")
+                        tables_skipped += 1
+                break
         
         print("\n" + "=" * 60)
         print(f"SYNC DELETED SUMMARY:")

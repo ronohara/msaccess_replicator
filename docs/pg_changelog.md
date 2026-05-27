@@ -1,5 +1,26 @@
 # PostgreSQL Replicator - Changelog
 
+## Version 1.38 (2026-05-27)
+
+**Added:**
+- `scanned_tables` set to track which tables have been processed during sync-deleted
+- `get_postgresql_row_count()` helper method for reusable row count queries
+- `get_parent_tables()` method to dynamically retrieve parent tables for a given child by scanning foreign keys
+- Dependency-based iteration in `sync_deleted_tables()` for fast mode
+
+**Changed:**
+- `sync_deleted_tables()` now processes tables in dependency order (parents before children) when `--slow` is NOT enabled
+- A table is only processed for deletion scanning when ALL its parent tables have already been scanned
+- Tables with no parent dependencies are processed first
+- Cascade deletions from parent tables can eliminate the need to scan child tables entirely
+- Added diagnostic debug logging for tables waiting on parents
+
+**Why:**
+- Processing parents first allows cascade deletions to remove child rows before child tables are scanned
+- Child tables whose row counts now match Access can be skipped entirely, reducing redundant work
+- This optimization mirrors the dependency resolution used in `copy_all_fkey_tables()`
+- Slow mode preserves original behavior for debugging and special cases
+
 ## Version 1.37 (2026-05-26)
 
 **Fixed:**
@@ -120,7 +141,7 @@ nonvolatile:
 | `--trace` | Enable trace logging to file |
 | `-a, --no-auto-index` | Suppress automatic creation of indexes/constraints for foreign keys |
 | `--sync-deleted` | Synchronize deleted records from Access to PostgreSQL |
-| `--slow` | Use slower processing; disables nonvolatile optimization (can be used with or without --sync-deleted) |
+| `--slow` | Use slower processing; disables nonvolatile optimization and dependency resolution (can be used with or without --sync-deleted) |
 | `--nonvolatile` | Skip copying non-volatile tables when row counts match (unless --slow is also enabled) |
 | `-S, --schema` | Drop and recreate database, then replicate schema ONLY |
 | `--adjust-ms-access` | Adjust MS Access schema (add AutoNumber primary key to tables without PK) |
@@ -139,8 +160,9 @@ Version numbers follow a sequential revision scheme:
 - **1.33** – Baseline
 - **1.34** – Bug fixes (index error, validation reporting)
 - **1.35** – New feature (nonvolatile optimization)
-- **1.36** – Feature back-ports from ms_replicator.py (v1.1, v1.4, v1.5, v1.6, v1.8)
+- **1.36** – Feature back-ports
 - **1.37** – Bug fixes (None handling in configuration sections)
+- **1.38** – Dependency-based sync-deleted processing (parents before children)
 
 ## File Locations
 
@@ -158,27 +180,3 @@ Version numbers follow a sequential revision scheme:
 - A separate program `ms_replicator.py` exists for **Microsoft SQL Server** target
 - Row-by-row processing and string concatenation for SQL are **deliberate design choices** (not oversights)
 - The program is **Windows-only** due to DAO dependency for MS Access access
-
-## Back-Ported Features from ms_replicator.py
-
-| ms_replicator Version | Feature | Status in pg_replicator |
-|----------------------|---------|------------------------|
-| v1.1 | Master database connection for network testing | ✅ v1.36 |
-| v1.4 | Enhanced result tracking from insert operations | ✅ v1.36 |
-| v1.4 | Validation summary written to log file | ✅ v1.36 |
-| v1.5 | Row existence checking method | ✅ v1.36 |
-| v1.5 | Detailed logging for rejected rows | ✅ v1.36 |
-| v1.5 | Distinguish between duplicate skipped and rejected | ✅ v1.36 |
-| v1.6 | Skip automatic UNIQUE constraints on child tables | ✅ v1.36 |
-| v1.8 | `--slow` option extended to normal replication | ✅ v1.36 |
-| v1.8 | Total elapsed runtime display | ✅ v1.36 |
-| v1.9 | None handling in configuration sections | ✅ v1.37 |
-
-## Future Development
-
-Remaining features from `ms_replicator.py` not yet back-ported:
-- Data type size detection for TEXT fields (v1.2)
-- Index compatibility checking (v1.2)
-- NULL key handling in UPSERT (v1.3)
-- Duplicate key detection with graceful handling (v1.3)
-- Filtered unique index support (v1.7) - Less critical for PostgreSQL as it already handles NULLs correctly

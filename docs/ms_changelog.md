@@ -1,5 +1,26 @@
 # MS SQL Server Replicator - Changelog
 
+## Version 1.10 (2026-05-27)
+
+**Added:**
+- `scanned_tables` set to track which tables have been processed during sync-deleted
+- `get_sqlserver_row_count()` helper method for reusable row count queries
+- `get_parent_tables()` method to dynamically retrieve parent tables for a given child by scanning foreign keys
+- Dependency-based iteration in `sync_deleted_tables()` for fast mode
+
+**Changed:**
+- `sync_deleted_tables()` now processes tables in dependency order (parents before children) when `--slow` is NOT enabled
+- A table is only processed for deletion scanning when ALL its parent tables have already been scanned
+- Tables with no parent dependencies are processed first
+- Cascade deletions from parent tables can eliminate the need to scan child tables entirely
+- Added diagnostic debug logging for tables waiting on parents
+
+**Why:**
+- Processing parents first allows cascade deletions to remove child rows before child tables are scanned
+- Child tables whose row counts now match Access can be skipped entirely, reducing redundant work
+- This optimization mirrors the dependency resolution used in `copy_all_fkey_tables()`
+- Slow mode preserves original behavior for debugging and special cases
+
 ## Version 1.9 (2026-05-26)
 
 **Fixed:**
@@ -172,7 +193,7 @@
 | `--trace` | Enable trace logging to file |
 | `-a, --no-auto-index` | Suppress automatic creation of indexes/constraints for foreign keys |
 | `--sync-deleted` | Synchronize deleted records from Access to SQL Server |
-| `--slow` | Use slower processing; disables nonvolatile optimization (can be used with or without --sync-deleted) |
+| `--slow` | Use slower processing; disables nonvolatile optimization and dependency resolution (can be used with or without --sync-deleted) |
 | `--nonvolatile` | Skip copying non-volatile tables when row counts match (unless --slow is also enabled) |
 | `-S, --schema` | Drop and recreate database, then replicate schema ONLY |
 | `--adjust-ms-access` | Adjust MS Access schema (add AutoNumber primary key to tables without PK) |
@@ -215,3 +236,4 @@ Version numbers follow semantic versioning where practical:
 | 1.7 | 2026-05-26 | Filtered unique indexes for nullable columns |
 | 1.8 | 2026-05-26 | Extended --slow option, total elapsed time |
 | 1.9 | 2026-05-26 | None handling in configuration sections |
+| 1.10 | 2026-05-27 | Dependency-based sync-deleted processing (parents before children) |
