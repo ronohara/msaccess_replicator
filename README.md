@@ -6,8 +6,8 @@ MS SQL Server or MySQL
 ## Description
 
 This project has the objective of replicating any MS Access database
-into the equivalent PostgreSQL database, MS SQL Seerver database
-or MySQL with as little configuration as possible.
+into the equivalent PostgreSQL database, MS SQL Server database
+or MySQL/MariaDB with as little configuration as possible.
 
 In the AI research world, there is almost no development aimed at
 integrating with user data stored in MS Access databases. There is
