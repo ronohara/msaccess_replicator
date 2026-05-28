@@ -12,7 +12,7 @@ or MySQL with as little configuration as possible.
 In the AI research world, there is almost no development aimed at
 integrating with user data stored in MS Access databases. There is
 however significant support for PostgreSQL database and others, so by creating a
-replicate of the user data, with the option to updated that replica at
+replicate of the user data, with the option to update that replica at
 will, it becomes possible to connect AI platforms to the data normally
 being managed using MS Access.
 
@@ -24,9 +24,6 @@ There are three versions of the replicator.
 - pg_replicator.pg  - the target database is in a PostgrSQL server
 - ms_replicator.py  - the target database is in an MS SQL server
 - my_replicator.py  - the target database is in a MySQL server
-
-The AI open context layer that we want to use the replicated database is
-[WrenAI](https://github.com/Canner/WrenAI)
 
 MS Access is a very effective UI and data management tool, but has
 strong limitations related to capacity and robustness. Microsoft
@@ -41,18 +38,18 @@ component is being strongly de-emphasized.
 
 I would estimate that many many users of the original MS Access tool
 have only modest transaction and storage capacity requirements, and very
-limited budgets for software migrations, so a free tool like this allows
-them to then use the amazing amount of development in the AI community for
+limited budgets for software migrations or experiements, so a free tool like this allows
+them to explore the amazing amount of development in the AI community for
 analysing data.
 
 
 ## Where you would use the replicator
 
 This replicator is a bare bones equivalent of MS SQL Server Migration
-Assistant for a target PostgreSQL database or MS SQL database, which is then accessible
+Assistant but for a target PostgreSQL database or MS SQL database or MySQL database, which is then accessible
 from many AI integration platforms.
 
-However the intended use is not the same.
+However the intended use is not the same as that Migraton Assistant
 
 The replicator is just a normal program. But its functions allow you to easily maintain a replica of your data in a database system that is much better (directly) supported in a wide range of AI platforms.
 
@@ -61,12 +58,12 @@ Microsoft SQL Server Migration Assistant is an interactive migration assistance 
 
 A big point is to leave your existing Access application(s) untouched. As a 'single source of truth' ... and the replication process becomes an automated workflow with zero manual steps to avoid that source of errors.
 
-Lots of people are extracting Excel or CSV files and feeding them into a AI platform. That works of course, but is normally a manual approach - excellent for experiments, but not so good for regular operation.
+Lots of people are extracting Excel or CSV files and feeding them into an AI platform. That works of course, but is normally a manual approach - excellent for experiments, but not so good for regular operation.
 
 
 ## Installation
 
-Refer to the installation notes in relevant PDF file in
+Refer to the installation notes in the relevant PDF file in
 the /docs directory
 
 ## Licensing note.
@@ -74,13 +71,13 @@ the /docs directory
 Although this is an MIT licensed project, the documentation is explicitly
 excluded from that license.
 
-It stands alone as a copyright document delivered in .pdf format and
-is available for you to read under the usual fair use arrangement for
+It stands alone as copyright documents delivered in .pdf format and markdown format.
+It is available for you to read under the usual fair use arrangement for
 this sort of documentation.
 
-We have done this to encourage the use this repository can be used as a central
+We have done this to encourage the use of this repository as a central
 point to coordinate revisions ... and retaining control of the
 docummentation encourages people to work on this repository instead
-of just forking their own version. But of course people remain free
+of just forking their own version of the code. But of course people remain free
 to do that too.
 
