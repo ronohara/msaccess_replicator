@@ -1,17 +1,17 @@
 # MS Access Replicator
 
-A Python tool for replicating Microsoft Access databases to PostgreSQL
-or MS SQL Server
+A Python tool for replicating Microsoft Access databases to PostgreSQL,
+MS SQL Server or MySQL
 
 ## Description
 
 This project has the objective of replicating any MS Access database
-into the equivalent PostgreSQL database or MS SQL Seerver database
-with as little configuration as possible.
+into the equivalent PostgreSQL database, MS SQL Seerver database
+or MySQL with as little configuration as possible.
 
 In the AI research world, there is almost no development aimed at
 integrating with user data stored in MS Access databases. There is
-however significant support for PostgreSQL database, so by creating a
+however significant support for PostgreSQL database and others, so by creating a
 replicate of the user data, with the option to updated that replica at
 will, it becomes possible to connect AI platforms to the data normally
 being managed using MS Access.
@@ -23,6 +23,7 @@ There are two versions of the replicator.
 
 - pg_replicator.pg  - the target database is in a PostgrSQL server
 - ms_replicator.py  - the target database in in an MS SQL server
+- my_replicator.py  - the target database in in a MySQL server
 
 The AI open context layer that we want to use the replicated database is
 [WrenAI](https://github.com/Canner/WrenAI)
@@ -65,7 +66,7 @@ Lots of people are extracting Excel or CSV files and feeding them into a AI plat
 
 ## Installation
 
-Refer to the installation notes in the MSAccess-pg-replicator or the MSAccess-ms-replicator PDF file in
+Refer to the installation notes in relevant PDF file in
 the /docs directory
 
 ## Licensing note.
@@ -77,7 +78,7 @@ It stands alone as a copyright document delivered in .pdf format and
 is available for you to read under the usual fair use arrangement for
 this sort of documentation.
 
-We have done this so that this repository can be used as a central
+We have done this to encourage the use this repository can be used as a central
 point to coordinate revisions ... and retaining control of the
 docummentation encourages people to work on this repository instead
 of just forking their own version. But of course people remain free
