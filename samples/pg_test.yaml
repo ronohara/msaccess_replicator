@@ -6,10 +6,18 @@ DAO:
   driver: "Microsoft Access Driver (*.mdb, *.accdb)"
   database: "Test.accdb"
 
-# Target PostgreSQL connection
+# Target PostgreSQL SQL connection
 postgresql:
-  host: "localhost"
+  host: localhost
   port: 5432
+  database: researchdata
+  user: replicator
+  password: syhunkea
+
+# Target MS SQL connection
+sqlserver:
+  host: "localhost"
+  port: 1433
   database: "test"
   user: "replicator"
   password: "xxxxxxxx"
