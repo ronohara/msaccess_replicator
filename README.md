@@ -19,11 +19,11 @@ being managed using MS Access.
 This document describes the ‘replicator’ program – not the research
 tools and processes that might use the replicated data.
 
-There are two versions of the replicator. 
+There are three versions of the replicator. 
 
 - pg_replicator.pg  - the target database is in a PostgrSQL server
-- ms_replicator.py  - the target database in in an MS SQL server
-- my_replicator.py  - the target database in in a MySQL server
+- ms_replicator.py  - the target database is in an MS SQL server
+- my_replicator.py  - the target database is in a MySQL server
 
 The AI open context layer that we want to use the replicated database is
 [WrenAI](https://github.com/Canner/WrenAI)
