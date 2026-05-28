@@ -1,0 +1,40 @@
+global:
+  debug: false
+  managerid: Replicator
+  verbose: true
+DAO:
+  driver: Microsoft Access Driver (*.mdb, *.accdb)
+  database: Test.accdb
+
+# Target MySQL connection
+mysql:
+  host: "localhost"
+  port: 3306
+  database: "test"
+  user: "replicator"
+  password: "bluewhale$54321"
+#  password: "wrongpwd"
+
+excluded:
+- Events
+nonvolatile:
+- ecgs
+- events
+- investigations
+- patients
+- some-log
+foreignkeys:
+  fk_patients_events:
+    base_table: patients
+    reference_table: events
+    base_columns:
+    - patient_number
+    reference_columns:
+    - patient_number
+  fk_patients_investigations:
+    base_table: patients
+    reference_table: investigations
+    base_columns:
+    - patient_number
+    reference_columns:
+    - patient_number
