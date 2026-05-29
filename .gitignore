@@ -65,3 +65,4 @@ logs/
 *.log
 temp/
 tmp/
+docs/MSAccess-pg-replicator.pdf
