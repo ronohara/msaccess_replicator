@@ -6,13 +6,8 @@ MS SQL Server, MySQL or MariaDB
 ## Description
 
 This project has the objective of replicating any MS Access database
-<<<<<<< HEAD
-into the equivalent PostgreSQL database, MS SQL Server database
-or MySQL/MariaDB with as little configuration as possible.
-=======
-into the equivalent PostgreSQL database, MS SQL Seerver database,MySQL
+into the equivalent PostgreSQL database, MS SQL Seerver, MySQL
 or MariaDB with as little configuration as possible.
->>>>>>> 9aa6587 (Update for MariaDB as a target choice)
 
 In the AI research world, there is almost no development aimed at
 integrating with user data stored in MS Access databases. There is
