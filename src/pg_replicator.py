@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-__version__ = "$Revision: 1.39 $"
+__version__ = "$Revision: 1.40 $"
 
 import sys
 import os
@@ -147,6 +147,8 @@ class ReplicationManager:
         self.test_network = False
         self.dump_data = False
         self.schema_only = False
+        self.create_views = False               # create views only mode
+        self.simple_names = False               # create simple lowercase names (no quoted identifiers)
         self.current_fk_iteration = 0
         self.no_auto_index = False          # suppress automatic index/constraint creation
         self.adjust_ms_access = False       # adjust MS Access schema flag
@@ -561,7 +563,7 @@ class ReplicationManager:
         fresh_counts = {}
         for table_name in self.validation_results.keys():
             try:
-                safe_table_name = self.sanitise_token_for_postgresql(table_name)
+                safe_table_name = self.get_sanitise_function()(table_name)
                 count_sql = f"SELECT COUNT(*) FROM {safe_table_name}"
                 result = self.pg_sql_execute(count_sql, fetch_one=True)
                 fresh_counts[table_name] = result[0] if result else 0
@@ -824,7 +826,7 @@ class ReplicationManager:
                 if not isinstance(col_entry, dict):
                     continue
                 col_name = col_entry.get('name', '')
-                pg_col_name = self.sanitise_token_for_postgresql(col_name)
+                pg_col_name = self.get_sanitise_function()(col_name)
                 if pg_col_name.lower() != column_name.lower():
                     continue
                 
@@ -1511,6 +1513,223 @@ class ReplicationManager:
         return indexes
     
     # ========================================================================
+    # GET SANITISE FUNCTION (DYNAMIC BASED ON simple_names FLAG)
+    # ========================================================================
+    
+    def get_sanitise_function(self):
+        """Return the appropriate sanitisation function based on simple_names flag.
+        
+        If simple_names is True, returns sanitise_for_sane_view (unquoted, lowercase, underscores)
+        If simple_names is False, returns sanitise_token_for_postgresql (quoted, preserves case/spaces)
+        """
+        if self.simple_names:
+            return self.sanitise_for_sane_view
+        else:
+            return self.sanitise_token_for_postgresql
+    
+    # ========================================================================
+    # SANE VIEW SANITISATION (for simple names and view aliases)
+    # ========================================================================
+    
+    def sanitise_for_sane_view(self, name):
+        """Sanitise a name (table or column) for use in sane views and simple-names mode.
+        
+        Rules:
+        - Convert to lowercase
+        - Replace spaces with underscores
+        - Replace '%' with '_percent' (special handling to avoid collisions)
+        - Replace '$' with:
+            - leading '$' -> 'dollar_'
+            - embedded '$' -> '_dollar_'
+            - trailing '$' -> '_dollar'
+        - Replace '#' with:
+            - leading '#' -> 'hash_'
+            - embedded '#' -> '_hash_'
+            - trailing '#' -> '_hash'
+        - Replace '@' with:
+            - leading '@' -> 'at_'
+            - embedded '@' -> '_at_'
+            - trailing '@' -> '_at'
+        - Replace '&' with:
+            - leading '&' -> 'amp_'
+            - embedded '&' -> '_amp_'
+            - trailing '&' -> '_amp'
+        - Replace '*' with:
+            - leading '*' -> 'star_'
+            - embedded '*' -> '_star_'
+            - trailing '*' -> '_star'
+        - Replace '+' with:
+            - leading '+' -> 'plus_'
+            - embedded '+' -> '_plus_'
+            - trailing '+' -> '_plus'
+        - Replace '-' with:
+            - leading '-' -> 'minus_'
+            - embedded '-' -> '_minus_'
+            - trailing '-' -> '_minus'
+        - Replace '(' with:
+            - leading '(' -> 'lbrk_'
+            - embedded '(' -> '_lbrk_'
+            - trailing '(' -> '_lbrk'
+        - Replace ')' with:
+            - leading ')' -> 'rbrk_'
+            - embedded ')' -> '_rbrk_'
+            - trailing ')' -> '_rbrk'
+        - Replace any other special character with underscore
+        - If the result starts with a digit, prefix with an underscore
+        - Does NOT quote the result
+        - Does NOT strip trailing underscores
+        """
+        if not name:
+            return ''
+        
+        name_str = str(name)
+        
+        # Convert to lowercase
+        result = name_str.lower()
+        
+        # Replace spaces with underscores
+        result = result.replace(' ', '_')
+        
+        # Special handling: replace '%' with '_percent'
+        result = result.replace('%', '_percent')
+        
+        # Special handling: replace '$' based on position
+        if '$' in result:
+            # Handle leading $ (starts with $)
+            if result.startswith('$'):
+                result = 'dollar_' + result[1:]
+            
+            # Handle trailing $ (ends with $)
+            if result.endswith('$'):
+                result = result[:-1] + '_dollar'
+            
+            # Handle remaining embedded $ (any $ left)
+            result = result.replace('$', '_dollar_')
+        
+        # Special handling: replace '#' based on position
+        if '#' in result:
+            # Handle leading # (starts with #)
+            if result.startswith('#'):
+                result = 'hash_' + result[1:]
+            
+            # Handle trailing # (ends with #)
+            if result.endswith('#'):
+                result = result[:-1] + '_hash'
+            
+            # Handle remaining embedded # (any # left)
+            result = result.replace('#', '_hash_')
+        
+        # Special handling: replace '@' based on position
+        if '@' in result:
+            # Handle leading @ (starts with @)
+            if result.startswith('@'):
+                result = 'at_' + result[1:]
+            
+            # Handle trailing @ (ends with @)
+            if result.endswith('@'):
+                result = result[:-1] + '_at'
+            
+            # Handle remaining embedded @ (any @ left)
+            result = result.replace('@', '_at_')
+        
+        # Special handling: replace '&' based on position
+        if '&' in result:
+            # Handle leading & (starts with &)
+            if result.startswith('&'):
+                result = 'amp_' + result[1:]
+            
+            # Handle trailing & (ends with &)
+            if result.endswith('&'):
+                result = result[:-1] + '_amp'
+            
+            # Handle remaining embedded & (any & left)
+            result = result.replace('&', '_amp_')
+        
+        # Special handling: replace '*' based on position
+        if '*' in result:
+            # Handle leading * (starts with *)
+            if result.startswith('*'):
+                result = 'star_' + result[1:]
+            
+            # Handle trailing * (ends with *)
+            if result.endswith('*'):
+                result = result[:-1] + '_star'
+            
+            # Handle remaining embedded * (any * left)
+            result = result.replace('*', '_star_')
+        
+        # Special handling: replace '+' based on position
+        if '+' in result:
+            # Handle leading + (starts with +)
+            if result.startswith('+'):
+                result = 'plus_' + result[1:]
+            
+            # Handle trailing + (ends with +)
+            if result.endswith('+'):
+                result = result[:-1] + '_plus'
+            
+            # Handle remaining embedded + (any + left)
+            result = result.replace('+', '_plus_')
+        
+        # Special handling: replace '-' based on position
+        if '-' in result:
+            # Handle leading - (starts with -)
+            if result.startswith('-'):
+                result = 'minus_' + result[1:]
+            
+            # Handle trailing - (ends with -)
+            if result.endswith('-'):
+                result = result[:-1] + '_minus'
+            
+            # Handle remaining embedded - (any - left)
+            result = result.replace('-', '_minus_')
+        
+        # Special handling: replace '(' based on position
+        if '(' in result:
+            # Handle leading ( (starts with ()
+            if result.startswith('('):
+                result = 'lbrk_' + result[1:]
+            
+            # Handle trailing ( (ends with ()
+            if result.endswith('('):
+                result = result[:-1] + '_lbrk'
+            
+            # Handle remaining embedded ( (any ( left)
+            result = result.replace('(', '_lbrk_')
+        
+        # Special handling: replace ')' based on position
+        if ')' in result:
+            # Handle leading ) (starts with ))
+            if result.startswith(')'):
+                result = 'rbrk_' + result[1:]
+            
+            # Handle trailing ) (ends with ))
+            if result.endswith(')'):
+                result = result[:-1] + '_rbrk'
+            
+            # Handle remaining embedded ) (any ) left)
+            result = result.replace(')', '_rbrk_')
+        
+        # Replace any other character that is not a-z, 0-9, or underscore with underscore
+        result = re.sub(r'[^a-z0-9_]', '_', result)
+        
+        # Remove consecutive underscores (replace with single underscore)
+        result = re.sub(r'_+', '_', result)
+        
+        # Strip leading underscores only (preserve trailing underscores)
+        result = result.lstrip('_')
+        
+        # If the result is empty after stripping leading underscores, return '_'
+        if not result:
+            result = '_'
+        
+        # If the result starts with a digit, prefix with an underscore
+        if result and result[0].isdigit():
+            result = '_' + result
+        
+        return result
+    
+    # ========================================================================
     # TABLE LOADING
     # ========================================================================
     
@@ -1521,22 +1740,22 @@ class ReplicationManager:
         
         tdef = self.dao_conn.TableDefs[table_name]
         
+        # Get the appropriate sanitisation function
+        sanitise_func = self.get_sanitise_function()
+        
         table_info = {
             'name': table_name,
-            'safe_name': self.sanitise_token_for_postgresql(table_name),
+            'safe_name': sanitise_func(table_name),
             'columns': [],
             'indexes': self.load_indexes(table_name),
             'primary_key': [],
             'unique_keys': []
         }
         
-        col_mapping = self.parameters.get('column_mapping', {}).get(table_name, {})
-        
         for i in range(tdef.Fields.Count):
             fld = tdef.Fields[i]
             orig_name = decode_sketchy_utf16(fld.Name)
-            normalized = self.normalize_column_name(orig_name)
-            safe_name = col_mapping.get(normalized, self.sanitise_token_for_postgresql(orig_name))
+            safe_name = sanitise_func(orig_name)
             
             col_info = {
                 'original_name': orig_name,
@@ -1622,9 +1841,13 @@ class ReplicationManager:
             frame = inspect.currentframe()
             logger.info(f"Line {frame.f_lineno} - check_primary_key called with params: table_name={table_name}, columns={columns}")
         
-        safe_table_name = self.sanitise_token_for_postgresql(table_name)
+        sanitise_func = self.get_sanitise_function()
+        safe_table_name = sanitise_func(table_name)
         unquoted_table_name = safe_table_name.strip('"')
-        columns_lower = [col.lower() for col in columns]
+        
+        # Sanitise the column names to match what PostgreSQL actually has
+        sanitised_columns = [sanitise_func(col) for col in columns]
+        columns_lower = [col.lower() for col in sanitised_columns]
         
         pk_columns_sql = f"""
             SELECT LOWER(a.attname) FROM pg_index i
@@ -1647,9 +1870,14 @@ class ReplicationManager:
         
         if self.check_primary_key(table_name, columns):
             return False
-        safe_table_name = self.sanitise_token_for_postgresql(table_name)
+        
+        sanitise_func = self.get_sanitise_function()
+        safe_table_name = sanitise_func(table_name)
         unquoted_table_name = safe_table_name.strip('"')
-        columns_lower = [col.lower() for col in columns]
+        
+        # Sanitise the column names to match what PostgreSQL actually has
+        sanitised_columns = [sanitise_func(col) for col in columns]
+        columns_lower = [col.lower() for col in sanitised_columns]
         
         unique_check_sql = f"""
             SELECT indexname, indexdef 
@@ -1768,9 +1996,13 @@ class ReplicationManager:
             frame = inspect.currentframe()
             logger.info(f"Line {frame.f_lineno} - check_reference_table_has_uniqueness called for {reference_table}.{reference_columns}")
         
-        safe_ref_table = self.sanitise_token_for_postgresql(reference_table)
+        sanitise_func = self.get_sanitise_function()
+        safe_ref_table = sanitise_func(reference_table)
         unquoted_table = safe_ref_table.strip('"')
-        columns_lower = [col.lower().strip('"') for col in reference_columns]
+        
+        # Sanitise the column names to match what PostgreSQL actually has
+        sanitised_columns = [sanitise_func(col) for col in reference_columns]
+        columns_lower = [col.lower().strip('"') for col in sanitised_columns]
         
         # Check for PRIMARY KEY
         pk_sql = f"""
@@ -1876,8 +2108,9 @@ class ReplicationManager:
             frame = inspect.currentframe()
             logger.info(f"Line {frame.f_lineno} - _create_primary_key_on_base_table called")
         
-        safe_base_table = self.sanitise_token_for_postgresql(base_table)
-        safe_columns = [self.sanitise_token_for_postgresql(col) for col in base_columns]
+        sanitise_func = self.get_sanitise_function()
+        safe_base_table = sanitise_func(base_table)
+        safe_columns = [sanitise_func(col) for col in base_columns]
         
         # Generate a constraint name based on the FK name
         constraint_name = self.sanitise_keyname_for_postgresql(f"pk_{fk_name}")
@@ -1934,6 +2167,115 @@ class ReplicationManager:
         
         logger.warning(f"Foreign key {fk_name}: PostgreSQL does NOT require uniqueness on child table '{base_table}' columns {base_columns}. Skipping automatic creation of unique constraint.")
         return None
+    
+    # ========================================================================
+    # INTERNAL METADATA TABLE
+    # ========================================================================
+    
+    def create_internal_replicator_table(self):
+        """Create the internal_replicator_data table to store replication metadata.
+        
+        This table records whether --simple-names mode was used when creating the schema,
+        so that subsequent replication runs know the naming convention of the target database.
+        """
+        if self.trace:
+            frame = inspect.currentframe()
+            logger.info(f"Line {frame.f_lineno} - create_internal_replicator_table called")
+        
+        create_sql = """
+            CREATE TABLE IF NOT EXISTS internal_replicator_data (
+                simplenames BOOLEAN NOT NULL
+            )
+        """
+        self.pg_sql_execute(create_sql)
+        self.pg_conn.commit()
+        logger.info("Created internal_replicator_data table")
+        
+        # Insert the row with the simple_names setting
+        insert_sql = f"""
+            INSERT INTO internal_replicator_data (simplenames) VALUES ({self.simple_names})
+        """
+        self.pg_sql_execute(insert_sql)
+        self.pg_conn.commit()
+        logger.info(f"Recorded simplenames={self.simple_names} in internal_replicator_data")
+        
+        if self.verbose:
+            print(f"  internal_replicator_data: simplenames={self.simple_names}")
+    
+    def read_internal_replicator_data(self):
+        """Read the simplenames value from the internal_replicator_data table.
+        
+        Returns:
+            True if simplenames is TRUE, False if simplenames is FALSE or table doesn't exist.
+        
+        If the table exists but has unexpected schema, exits with error.
+        """
+        if self.trace:
+            frame = inspect.currentframe()
+            logger.info(f"Line {frame.f_lineno} - read_internal_replicator_data called")
+        
+        try:
+            # Check if table exists
+            check_sql = """
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.tables 
+                    WHERE table_schema = 'public' 
+                    AND table_name = 'internal_replicator_data'
+                )
+            """
+            self.pg_cursor.execute(check_sql)
+            table_exists = self.pg_cursor.fetchone()[0]
+            
+            if not table_exists:
+                logger.info("internal_replicator_data table not found - defaulting to simplenames=FALSE")
+                if self.verbose:
+                    print("  internal_replicator_data not found - defaulting to quoted naming mode")
+                return False
+            
+            # Check table schema has expected columns
+            column_check_sql = """
+                SELECT column_name, data_type 
+                FROM information_schema.columns 
+                WHERE table_schema = 'public' 
+                AND table_name = 'internal_replicator_data'
+                ORDER BY ordinal_position
+            """
+            self.pg_cursor.execute(column_check_sql)
+            columns = self.pg_cursor.fetchall()
+            
+            expected_columns = [('simplenames', 'boolean')]
+            
+            if len(columns) != len(expected_columns):
+                logger.error(f"internal_replicator_data has unexpected schema: found {len(columns)} columns, expected {len(expected_columns)}")
+                logger.error(f"  Found columns: {columns}")
+                logger.error(f"  Expected: {expected_columns}")
+                self.exit_program(1, "internal_replicator_data has unexpected schema")
+            
+            for (col_name, col_type), (exp_name, exp_type) in zip(columns, expected_columns):
+                if col_name.lower() != exp_name or col_type.lower() != exp_type:
+                    logger.error(f"internal_replicator_data has unexpected column: {col_name} {col_type}")
+                    logger.error(f"  Expected: {exp_name} {exp_type}")
+                    self.exit_program(1, "internal_replicator_data has unexpected schema")
+            
+            # Read the value
+            select_sql = "SELECT simplenames FROM internal_replicator_data LIMIT 1"
+            self.pg_cursor.execute(select_sql)
+            row = self.pg_cursor.fetchone()
+            
+            if row is None:
+                logger.warning("internal_replicator_data table exists but has no rows - defaulting to simplenames=FALSE")
+                return False
+            
+            simplenames_value = row[0]
+            logger.info(f"Read simplenames={simplenames_value} from internal_replicator_data")
+            if self.verbose:
+                print(f"  internal_replicator_data: simplenames={simplenames_value}")
+            
+            return bool(simplenames_value)
+            
+        except Exception as e:
+            logger.error(f"Failed to read internal_replicator_data: {e}")
+            self.exit_program(1, f"Failed to read internal_replicator_data: {e}")
     
     # ========================================================================
     # ADJUST MS ACCESS SCHEMA
@@ -2254,7 +2596,7 @@ class ReplicationManager:
         
         if pk_columns:
             key_columns = [row[0] for row in pk_columns]
-            key_column_names = [self.sanitise_token_for_postgresql(col) for col in key_columns]
+            key_column_names = [self.get_sanitise_function()(col) for col in key_columns]
             logger.info(f"_sync_deleted_table: {table_name} using PRIMARY KEY: {', '.join(key_columns)}")
         else:
             # No PRIMARY KEY - look for first UNIQUE constraint
@@ -2274,7 +2616,7 @@ class ReplicationManager:
             
             if unique_columns:
                 key_columns = [row[0] for row in unique_columns]
-                key_column_names = [self.sanitise_token_for_postgresql(col) for col in key_columns]
+                key_column_names = [self.get_sanitise_function()(col) for col in key_columns]
                 logger.info(f"_sync_deleted_table: {table_name} using UNIQUE constraint: {', '.join(key_columns)}")
             else:
                 # No key available - cannot sync deletions
@@ -2318,8 +2660,8 @@ class ReplicationManager:
             return
         
         # Build ORDER BY clause for pagination (must be deterministic)
-        # Important: Use sanitise_token_for_postgresql to handle spaces, mixed case, and reserved words
-        quoted_key_columns = [self.sanitise_token_for_postgresql(col) for col in key_columns]
+        # Important: Use get_sanitise_function() to handle spaces, mixed case, and reserved words
+        quoted_key_columns = [self.get_sanitise_function()(col) for col in key_columns]
         order_by_clause = f"ORDER BY {', '.join(quoted_key_columns)}"
         
         # Build WHERE clause template for Access lookup
@@ -2347,7 +2689,7 @@ class ReplicationManager:
             if last_key_values is None:
                 # First batch - no WHERE clause
                 select_sql = f"""
-                    SELECT {', '.join([self.sanitise_token_for_postgresql(col) for col in all_column_names])}
+                    SELECT {', '.join([self.get_sanitise_function()(col) for col in all_column_names])}
                     FROM {safe_table_name}
                     {order_by_clause}
                     LIMIT {batch_size}
@@ -2361,10 +2703,10 @@ class ReplicationManager:
                 
                 if len(key_columns) == 1:
                     # Single key column - simple comparison with quoted column name
-                    quoted_key_col = self.sanitise_token_for_postgresql(key_columns[0])
+                    quoted_key_col = self.get_sanitise_function()(key_columns[0])
                     last_value_literal = convert_dao_value_to_postgresql_literal(last_key_values[0])
                     select_sql = f"""
-                        SELECT {', '.join([self.sanitise_token_for_postgresql(col) for col in all_column_names])}
+                        SELECT {', '.join([self.get_sanitise_function()(col) for col in all_column_names])}
                         FROM {safe_table_name}
                         WHERE {quoted_key_col} > {last_value_literal}
                         {order_by_clause}
@@ -2372,10 +2714,10 @@ class ReplicationManager:
                     """
                 else:
                     # For composite keys, use tuple comparison with quoted column names
-                    quoted_key_columns_list = [self.sanitise_token_for_postgresql(col) for col in key_columns]
+                    quoted_key_columns_list = [self.get_sanitise_function()(col) for col in key_columns]
                     last_values_literals = [convert_dao_value_to_postgresql_literal(v) for v in last_key_values]
                     select_sql = f"""
-                        SELECT {', '.join([self.sanitise_token_for_postgresql(col) for col in all_column_names])}
+                        SELECT {', '.join([self.get_sanitise_function()(col) for col in all_column_names])}
                         FROM {safe_table_name}
                         WHERE ({', '.join(quoted_key_columns_list)}) > ({', '.join(last_values_literals)})
                         {order_by_clause}
@@ -2474,7 +2816,7 @@ class ReplicationManager:
                     sub_batch = keys_to_delete[i:i+delete_batch_size]
                     
                     # Build string concatenation DELETE query with quoted key columns
-                    quoted_key_columns_list = [self.sanitise_token_for_postgresql(col) for col in key_columns]
+                    quoted_key_columns_list = [self.get_sanitise_function()(col) for col in key_columns]
                     row_value_lists = []
                     for pk_tuple in sub_batch:
                         value_literals = [convert_dao_value_to_postgresql_literal(v) for v in pk_tuple]
@@ -2798,6 +3140,9 @@ class ReplicationManager:
         
         for table_info in tables_to_process:
             safe_table_name = table_info['safe_name']
+            # Get the unquoted table name for checking (strip quotes if present)
+            unquoted_table_name = safe_table_name.strip('"')
+            
             for idx in table_info.get('indexes', []):
                 if idx.get('primary'):
                     continue
@@ -2815,9 +3160,10 @@ class ReplicationManager:
                 
                 safe_idx_name = self.normalise_index_name(table_info['name'], idx['name'])
                 
+                # Use the unquoted sanitised table name for the existence check
                 check_sql = f"""
                     SELECT indexname FROM pg_indexes 
-                    WHERE LOWER(tablename) = LOWER('{escape_postgresql_string(table_info['name'])}')
+                    WHERE LOWER(tablename) = LOWER('{escape_postgresql_string(unquoted_table_name)}')
                     AND LOWER(indexname) = LOWER('{escape_postgresql_string(safe_idx_name)}')
                     AND schemaname = 'public'
                 """
@@ -2897,6 +3243,18 @@ class ReplicationManager:
                     return
                 try:
                     constraint_name = self.ensure_uniqueness_on_base_table(base_table, base_columns, fk_name)
+                    # Check if ensure_uniqueness_on_base_table actually did something
+                    # Currently it does nothing and returns None - so we should skip
+                    if constraint_name is None:
+                        logger.error(f"FATAL: Foreign key '{fk_name}' cannot be created - neither table has PRIMARY KEY or UNIQUE constraint on the referenced columns")
+                        logger.error(f"  Child table: {base_table}({', '.join(base_columns)})")
+                        logger.error(f"  Parent table: {reference_table}({', '.join(reference_columns)})")
+                        logger.error(f"  Please add PRIMARY KEY or UNIQUE constraint to one of these tables and re-run schema creation")
+                        if is_from_config:
+                            self.exit_program(1, f"Failed to create foreign key {fk_name} - missing unique constraint")
+                        else:
+                            logger.warning(f"Skipping foreign key from MS Access discovery")
+                            return
                     logger.info(f"Retrying foreign key creation after ensuring uniqueness on base table")
                     self.create_foreign_key(fk_name, fk_info)
                     return
@@ -2924,17 +3282,21 @@ class ReplicationManager:
             logger.info(f"Skipping foreign key '{fk_name}' - reference_table '{reference_table}' is a system table")
             return
         
+        sanitise_func = self.get_sanitise_function()
+        
         safe_fk_name = self.sanitise_keyname_for_postgresql(fk_name)
-        safe_base_table = self.sanitise_token_for_postgresql(base_table)
-        safe_ref_table = self.sanitise_token_for_postgresql(reference_table)
+        safe_base_table = sanitise_func(base_table)
+        safe_ref_table = sanitise_func(reference_table)
         
         # IMPROVED CHECK - Check specifically on the base table where the constraint will be created
+        # Use the sanitised table name for the check
+        unquoted_base_table = safe_base_table.strip('"')
         check_sql = f"""
             SELECT 1
             FROM information_schema.table_constraints 
             WHERE constraint_type = 'FOREIGN KEY'
             AND LOWER(constraint_name) = LOWER('{escape_postgresql_string(safe_fk_name)}')
-            AND LOWER(table_name) = LOWER('{escape_postgresql_string(base_table)}')
+            AND LOWER(table_name) = LOWER('{escape_postgresql_string(unquoted_base_table)}')
             AND table_schema = 'public'
         """
         existing = self.pg_sql_execute(check_sql, fetch_one=True)
@@ -2945,21 +3307,16 @@ class ReplicationManager:
                 print(f"  Foreign key {fk_name} already exists - skipping")
             return
         
-        base_mapping = self.parameters.get('column_mapping', {}).get(base_table, {})
-        ref_mapping = self.parameters.get('column_mapping', {}).get(reference_table, {})
-        
         resolved_base = []
         resolved_ref = []
         for col in base_columns:
-            normalized = self.normalize_column_name(col)
-            resolved_base.append(base_mapping.get(normalized, self.sanitise_token_for_postgresql(col)))
+            resolved_base.append(sanitise_func(col))
         for col in reference_columns:
-            normalized = self.normalize_column_name(col)
-            resolved_ref.append(ref_mapping.get(normalized, self.sanitise_token_for_postgresql(col)))
+            resolved_ref.append(sanitise_func(col))
         
         safe_fk_name = self.sanitise_keyname_for_postgresql(fk_name)
-        safe_base_table = self.sanitise_token_for_postgresql(base_table)
-        safe_ref_table = self.sanitise_token_for_postgresql(reference_table)
+        safe_base_table = sanitise_func(base_table)
+        safe_ref_table = sanitise_func(reference_table)
         
         alter_sql = f"""
             ALTER TABLE {safe_base_table} 
@@ -3110,6 +3467,10 @@ class ReplicationManager:
         admin_conn.close()
         
         self.open_connections()
+        
+        # Create internal metadata table and record simple_names setting
+        self.create_internal_replicator_table()
+        
         self.get_foreign_keys()
         table_names = self.get_all_tables_to_process()
         
@@ -3128,6 +3489,251 @@ class ReplicationManager:
         
         self.close_connections()
     
+    # ========================================================================
+    # SANE VIEW CREATION METHODS
+    # ========================================================================
+    
+    def create_sane_views(self):
+        """Create sane views in PostgreSQL for all tables created by replicate_schema.
+        
+        For each table, creates a view named view_{sanitised_table_name} that:
+        - Contains all columns from the original table
+        - Each column is aliased with a sanitised lowercase name (spaces/special chars -> underscores)
+        - Handles name collisions by appending _01, _02, etc.
+        - Uses CREATE OR REPLACE VIEW
+        - Created in public schema
+        """
+        if self.trace:
+            frame = inspect.currentframe()
+            logger.info(f"Line {frame.f_lineno} - create_sane_views called")
+        
+        logger.info("create_sane_views: Starting sane view creation")
+        print("\n" + "=" * 60)
+        print("CREATING SANE VIEWS")
+        print("=" * 60)
+        
+        # Get all tables to process (same as replicate_schema would have used)
+        table_names = self.get_all_tables_to_process()
+        
+        if not table_names:
+            logger.warning("create_sane_views: No tables found to create views for")
+            print("  No tables found - nothing to do")
+            return
+        
+        views_created = 0
+        errors = 0
+        
+        for table_name in table_names:
+            try:
+                # Load table info to get column names
+                table_info = self.load_table(table_name)
+                original_table_name = table_info['name']
+                safe_original_table = self.get_sanitise_function()(original_table_name)
+                
+                # Generate sanitised view name with "view_" prefix
+                sane_table_base = self.sanitise_for_sane_view(original_table_name)
+                sane_view_name = f"view_{sane_table_base}"
+                
+                # Build column mappings with collision detection
+                column_aliases = {}
+                alias_counts = {}
+                
+                for col in table_info['columns']:
+                    original_col_name = col['original_name']
+                    sane_alias = self.sanitise_for_sane_view(original_col_name)
+                    
+                    # Handle collisions
+                    if sane_alias in column_aliases.values():
+                        # Increment count for this alias
+                        if sane_alias not in alias_counts:
+                            alias_counts[sane_alias] = 1
+                        else:
+                            alias_counts[sane_alias] += 1
+                        
+                        # Create suffixed alias with two digits
+                        suffix = f"_{alias_counts[sane_alias]:02d}"
+                        sane_alias = sane_alias + suffix
+                    
+                    column_aliases[original_col_name] = sane_alias
+                
+                # Build the SELECT clause using the sanitised column name from table_info
+                select_parts = []
+                for col in table_info['columns']:
+                    original_col_name = col['original_name']
+                    sane_alias = column_aliases[original_col_name]
+                    
+                    # Use the sanitised column name (already properly formatted for PostgreSQL)
+                    column_identifier = col['name']
+                    
+                    select_parts.append(f"    {column_identifier} AS {sane_alias}")
+                
+                # Build the full CREATE OR REPLACE VIEW statement
+                select_clause = ",\n".join(select_parts)
+                create_view_sql = f"""
+CREATE OR REPLACE VIEW {sane_view_name} AS
+SELECT
+{select_clause}
+FROM {safe_original_table}
+"""
+                
+                # Execute the SQL
+                self.pg_sql_execute(create_view_sql)
+                self.pg_conn.commit()
+                
+                views_created += 1
+                print(f"  ✓ Created view: {sane_view_name} (based on {original_table_name})")
+                logger.info(f"create_sane_views: Created view {sane_view_name} from table {original_table_name}")
+                
+            except Exception as e:
+                errors += 1
+                error_msg = f"  ✗ Failed to create view for table {table_name}: {e}"
+                print(error_msg)
+                logger.error(f"create_sane_views: Failed for table {table_name} - {e}")
+                if self.debug:
+                    traceback.print_exc()
+        
+        # Summary
+        print("\n" + "-" * 60)
+        print(f"SANE VIEWS SUMMARY:")
+        print(f"  Views created: {views_created}")
+        print(f"  Errors:        {errors}")
+        print("=" * 60)
+        
+        logger.info(f"create_sane_views: Completed - {views_created} views created, {errors} errors")
+    
+    def create_views_only(self):
+        """Create sane views on an existing PostgreSQL database based on MS Access tables.
+        
+        This mode:
+        - Connects to both MS Access and PostgreSQL
+        - Does NOT drop or recreate the database
+        - Does NOT copy schema or data
+        - Only creates sane views for tables that exist in MS Access (subject to exclusions)
+        - Assumes the target tables already exist in PostgreSQL
+        - Reads simplenames from internal_replicator_data to determine naming mode
+        """
+        if self.trace:
+            frame = inspect.currentframe()
+            logger.info(f"Line {frame.f_lineno} - create_views_only called")
+        
+        logger.info("create_views_only: Starting view creation on existing database")
+        print("\n" + "=" * 60)
+        print("CREATE SANE VIEWS (EXISTING DATABASE)")
+        print("=" * 60)
+        
+        # Open both connections
+        try:
+            self.open_DAO_connection()
+            self.open_postgresql_connection()
+        except Exception as e:
+            logger.error(f"create_views_only: Failed to open connections: {e}")
+            print(f"Error: Failed to open connections: {e}")
+            self.exit_program(1, "Connection failed")
+        
+        # Read the simple_names setting from internal_replicator_data to determine naming mode
+        self.simple_names = self.read_internal_replicator_data()
+        if self.verbose:
+            print(f"  Using naming mode: {'simple names (unquoted)' if self.simple_names else 'quoted names'}")
+        
+        # Get the list of tables from MS Access (with exclusions applied)
+        table_names = self.get_all_tables_to_process()
+        
+        if not table_names:
+            logger.warning("create_views_only: No tables found in MS Access (after exclusions)")
+            print("  No tables found - nothing to do")
+            self.close_connections()
+            return
+        
+        print(f"  Found {len(table_names)} tables in MS Access (after exclusions)")
+        logger.info(f"create_views_only: Found {len(table_names)} tables")
+        
+        views_created = 0
+        errors = 0
+        
+        for table_name in table_names:
+            try:
+                # Load table info to get column names (from MS Access)
+                table_info = self.load_table(table_name)
+                original_table_name = table_info['name']
+                safe_original_table = self.get_sanitise_function()(original_table_name)
+                
+                # Check if the table exists in PostgreSQL
+                if not self.table_exists_in_postgresql(safe_original_table):
+                    print(f"  ⊘ {original_table_name}: Table does not exist in PostgreSQL (looking for {safe_original_table}) - skipping")
+                    logger.warning(f"create_views_only: Table {original_table_name} not found in PostgreSQL (expected {safe_original_table})")
+                    continue
+                
+                # Generate sanitised view name with "view_" prefix
+                sane_table_base = self.sanitise_for_sane_view(original_table_name)
+                sane_view_name = f"view_{sane_table_base}"
+                
+                # Build column mappings with collision detection
+                column_aliases = {}
+                alias_counts = {}
+                
+                for col in table_info['columns']:
+                    original_col_name = col['original_name']
+                    sane_alias = self.sanitise_for_sane_view(original_col_name)
+                    
+                    # Handle collisions
+                    if sane_alias in column_aliases.values():
+                        if sane_alias not in alias_counts:
+                            alias_counts[sane_alias] = 1
+                        else:
+                            alias_counts[sane_alias] += 1
+                        
+                        suffix = f"_{alias_counts[sane_alias]:02d}"
+                        sane_alias = sane_alias + suffix
+                    
+                    column_aliases[original_col_name] = sane_alias
+                
+                # Build the SELECT clause using the sanitised column name from table_info
+                select_parts = []
+                for col in table_info['columns']:
+                    original_col_name = col['original_name']
+                    sane_alias = column_aliases[original_col_name]
+                    
+                    # Use the sanitised column name (already properly formatted for PostgreSQL)
+                    column_identifier = col['name']
+                    
+                    select_parts.append(f"    {column_identifier} AS {sane_alias}")
+                
+                # Build the full CREATE OR REPLACE VIEW statement
+                select_clause = ",\n".join(select_parts)
+                create_view_sql = f"""
+CREATE OR REPLACE VIEW {sane_view_name} AS
+SELECT
+{select_clause}
+FROM {safe_original_table}
+"""
+                
+                # Execute the SQL
+                self.pg_sql_execute(create_view_sql)
+                self.pg_conn.commit()
+                
+                views_created += 1
+                print(f"  ✓ Created view: {sane_view_name} (based on {original_table_name})")
+                logger.info(f"create_views_only: Created view {sane_view_name} from table {original_table_name}")
+                
+            except Exception as e:
+                errors += 1
+                error_msg = f"  ✗ Failed to create view for table {table_name}: {e}"
+                print(error_msg)
+                logger.error(f"create_views_only: Failed for table {table_name} - {e}")
+                if self.debug:
+                    traceback.print_exc()
+        
+        # Summary
+        print("\n" + "-" * 60)
+        print(f"VIEW CREATION SUMMARY:")
+        print(f"  Views created: {views_created}")
+        print(f"  Errors:        {errors}")
+        print("=" * 60)
+        
+        logger.info(f"create_views_only: Completed - {views_created} views created, {errors} errors")
+        
+        self.close_connections()
+    
     def replicate_tables(self):
         if self.trace:
             frame = inspect.currentframe()
@@ -3139,6 +3745,11 @@ class ReplicationManager:
         self.validate_configuration()
         
         self.open_connections()
+        
+        # Read the simple_names setting from internal_replicator_data if it exists
+        # Default to FALSE if table doesn't exist
+        self.simple_names = self.read_internal_replicator_data()
+        
         if not self.validate_transformation():
             logger.error("invalid transformations - check your spelling, capitals and spaces")
             logger.error("FATAL: invalid transformations - no point in continuing")
@@ -3261,6 +3872,8 @@ class ReplicationManager:
         print(f"  test_network: {self.test_network}")
         print(f"  dump_data: {self.dump_data}")
         print(f"  schema_only: {self.schema_only}")
+        print(f"  create_views: {self.create_views}")
+        print(f"  simple_names: {self.simple_names}")
         print(f"  full_refresh: {self.full_refresh}")
         print(f"  current_fk_iteration: {self.current_fk_iteration}")
         print(f"  no_auto_index: {self.no_auto_index}")
@@ -3430,11 +4043,15 @@ def main():
                         help='Use slower processing; disables nonvolatile optimization and dependency resolution (can be used with or without --sync-deleted)')
     parser.add_argument('--nonvolatile', action='store_true',
                         help='Skip copying non-volatile tables when row counts match (unless --slow is also enabled)')
+    parser.add_argument('--simple-names', action='store_true',
+                        help='Create tables and columns with simple lowercase names (no quoted identifiers). Can only be used with --schema.')
     
     # Mutually exclusive action group
     action_group = parser.add_mutually_exclusive_group()
     action_group.add_argument('-S', '--schema', action='store_true', 
                               help='Drop and recreate database, then replicate schema ONLY')
+    action_group.add_argument('--create-views', action='store_true',
+                              help='Create sane views on existing database (no schema changes, no data copy). When used with --schema, creates schema THEN views.')
     action_group.add_argument('--adjust-ms-access', action='store_true',
                               help='Adjust MS Access schema (add AutoNumber primary key to tables without PK)')
     action_group.add_argument('-l', '--list', action='store_true', 
@@ -3450,6 +4067,12 @@ def main():
     
     # --slow is now allowed without --sync-deleted (it also affects nonvolatile optimization)
     # No error condition needed
+    
+    # --simple-names can only be used with --schema
+    if args.simple_names and not args.schema:
+        print("Error: --simple-names can only be used with --schema")
+        logger.error("--simple-names specified without --schema")
+        sys.exit(1)
     
     version_raw = __version__
     if args.version:
@@ -3539,6 +4162,8 @@ def main():
     manager.test_network = args.network
     manager.dump_data = args.dump
     manager.schema_only = args.schema
+    manager.create_views = args.create_views
+    manager.simple_names = args.simple_names
     manager.full_refresh = args.full_refresh
     manager.no_auto_index = args.no_auto_index
     manager.adjust_ms_access = args.adjust_ms_access
@@ -3559,8 +4184,14 @@ def main():
             manager.get_foreign_keys()
             manager.get_all_tables_to_process()
             manager.dump_internal_data()
+        elif manager.schema_only and manager.create_views:
+            # Both flags present - replicate schema then create views
+            manager.replicate_schema()
+            manager.create_sane_views()
         elif manager.schema_only:
             manager.replicate_schema()
+        elif manager.create_views:
+            manager.create_views_only()
         elif manager.adjust_ms_access:
             # Only DAO connection needed - PostgreSQL not opened
             manager.adjust_ms_access_schema()
