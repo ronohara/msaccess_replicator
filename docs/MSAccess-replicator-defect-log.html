@@ -101,6 +101,7 @@
     font-size: 0.92rem;
   }
   .callout strong { color: var(--accent); }
+  .callout a { color: var(--accent); }
   footer {
     text-align: center;
     padding: 2rem 1.5rem;
@@ -137,6 +138,22 @@
 
   <h2>Active Defects</h2>
   <p>No active defects. All known issues have been resolved and committed.</p>
+
+  <h2>Related Investigations</h2>
+
+  <div class="callout">
+    <strong>DAO type 101 (Attachment) and the complex-type skip &mdash; investigated 2026-10-07.</strong>
+    All three replicators skip Access <code>Attachment</code> (DAO type 101) and multi-valued (102&ndash;109) fields when
+    building a table's schema, and each skip is logged at INFO with the field name and its type. A separate
+    investigation asked whether the defect found in the Rust port, <code>msaccess-replicator-ng</code> &mdash; where
+    the same skip is silent and leaves the recordset's per-field type and scale metadata misaligned by one position,
+    mis-scaling any <code>Currency</code> or <code>Decimal</code> column after a dropped one &mdash; is present here.
+    <strong>It is not.</strong> The Python readers convert values generically
+    (<code>convert_dao_value_to_python()</code>) with no per-field metadata vector to misalign, and unlike the port
+    they read only the surviving columns, so the attachment's value is never touched.
+    The full comparison is recorded in
+    <a href="DAO-datatype-bug-2026-10-07.html">DAO-datatype-bug-2026-10-07.html</a>.
+  </div>
 
   <h2>Resolved Defects (Committed)</h2>
 

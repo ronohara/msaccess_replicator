@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>DAO type 101 (Attachment) — replicator family investigation</title>
+<style>
+  :root {
+    --bg: #f8fafc;
+    --card-bg: #ffffff;
+    --text: #1e293b;
+    --text-muted: #64748b;
+    --accent: #3b82f6;
+    --accent-hover: #2563eb;
+    --accent-light: #eff6ff;
+    --border: #e2e8f0;
+    --radius: 8px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+  }
+  nav {
+    background: var(--card-bg);
+    border-bottom: 1px solid var(--border);
+    padding: 0 1.5rem;
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    box-shadow: var(--shadow);
+    display: flex;
+    align-items: center;
+    gap: 1.5rem;
+    height: 56px;
+  }
+  nav .brand {
+    font-weight: 700;
+    font-size: 1.05rem;
+    color: var(--accent);
+    white-space: nowrap;
+    text-decoration: none;
+  }
+  nav a {
+    color: var(--text-muted);
+    text-decoration: none;
+    font-size: 0.9rem;
+    white-space: nowrap;
+    padding: 0.4rem 0;
+    border-bottom: 2px solid transparent;
+    transition: color 0.15s, border-color 0.15s;
+  }
+  nav a:hover, nav a.active { color: var(--accent); border-bottom-color: var(--accent); }
+  .hero {
+    background: linear-gradient(135deg, #1e40af 0%, #3b82f6 50%, #6366f1 100%);
+    color: #fff;
+    padding: 3rem 1.5rem 2rem;
+    text-align: center;
+  }
+  .hero h1 { font-size: 2rem; margin-bottom: 0.4rem; font-weight: 800; }
+  .hero p { font-size: 1.05rem; color: #fff; max-width: 720px; margin: 0 auto; }
+  .container { max-width: 1100px; margin: 0 auto; padding: 2rem 1.5rem; }
+  h2 { color: var(--accent); margin: 2rem 0 0.75rem; font-size: 1.3rem; padding-bottom: 0.3rem; border-bottom: 2px solid var(--accent-light); }
+  h3 { font-size: 1.02rem; margin: 1.4rem 0 0.5rem; color: var(--text); }
+  p { color: var(--text-muted); margin-bottom: 1rem; font-size: 0.94rem; line-height: 1.7; }
+  ul, ol { color: var(--text-muted); margin: 0 0 1rem 1.4rem; font-size: 0.94rem; }
+  li { margin-bottom: 0.35rem; }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1rem 0 1.8rem;
+    font-size: 0.88rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    overflow: hidden;
+  }
+  th {
+    background: var(--accent-light);
+    color: var(--accent);
+    font-weight: 600;
+    text-align: left;
+    padding: 0.6rem 0.9rem;
+    border-bottom: 2px solid var(--accent);
+  }
+  td {
+    padding: 0.6rem 0.9rem;
+    border-bottom: 1px solid var(--border);
+    color: var(--text-muted);
+    vertical-align: top;
+  }
+  td:first-child { font-weight: 600; color: var(--text); }
+  pre {
+    background: #1e293b;
+    color: #e2e8f0;
+    padding: 0.9rem 1.1rem;
+    border-radius: 6px;
+    font-size: 0.82rem;
+    overflow-x: auto;
+    margin: 0.6rem 0 1.2rem;
+    line-height: 1.5;
+    font-family: "SF Mono", "Fira Code", "Fira Mono", "Consolas", monospace;
+  }
+  pre code { background: none; color: inherit; padding: 0; }
+  .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 4px; font-size: 0.8rem; font-weight: 600; }
+  .badge-fix { background: #dcfce7; color: #166534; }
+  .badge-open { background: #fef3c7; color: #92400e; }
+  .badge-risk { background: #fee2e2; color: #991b1b; }
+  .callout {
+    background: var(--accent-light);
+    border-left: 3px solid var(--accent);
+    padding: 1rem 1.2rem;
+    margin: 1.5rem 0;
+    border-radius: var(--radius);
+    font-size: 0.92rem;
+    color: var(--text-muted);
+  }
+  .callout strong { color: var(--accent); }
+  .callout a { color: var(--accent); }
+  footer {
+    text-align: center;
+    padding: 2rem 1.5rem;
+    color: var(--text-muted);
+    font-size: 0.82rem;
+    border-top: 1px solid var(--border);
+    margin-top: 2rem;
+  }
+  footer a { color: var(--accent); text-decoration: none; }
+  code {
+    background: var(--accent-light);
+    color: var(--accent);
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    font-size: 0.85em;
+    font-family: "SF Mono", "Fira Code", "Fira Mono", "Consolas", monospace;
+  }
+</style>
+</head>
+<body>
+
+<nav>
+  <a href="https://replicator.sentuny.com/" class="brand">MS Access Replicator</a>
+  <a href="MSAccess-replicator-defect-log.html">Defect Log</a>
+  <a href="#" class="active">DAO type 101</a>
+</nav>
+
+<div class="hero">
+  <h1>DAO type 101 — Attachment</h1>
+  <p>Whether the three Python replicators carry the complex-type defect found in the Rust port. They carry the skip; they do not carry the defect.</p>
+</div>
+
+<div class="container">
+
+  <h2>Summary</h2>
+  <p>Access stores an attachment in a field of DAO type <code>101</code>. All three replicators — <code>pg_replicator.py</code>, <code>my_replicator.py</code> and <code>ms_replicator.py</code> — skip such a field when building a table's schema, and every one of them says so in its log. A separate investigation of the Rust port, <code>msaccess-replicator-ng</code>, found three things: the skip is silent there, it leaves the recordset's per-field type and scale metadata misaligned, and the row reader touches the attachment value on every row.</p>
+
+  <p><strong>One sentence.</strong> The Python replicators share the first behaviour by design and announce it; the metadata misalignment and the per-row warning are properties of the Rust port's own implementation and cannot arise in the Python, which converts values without any per-field metadata at all.</p>
+
+  <div class="callout">
+    <strong>The defect as found in the Rust port has three parts.</strong> This document answers each of them separately against the Python source:
+    <ol style="margin: 0.6rem 0 0 1.3rem;">
+      <li>complex-type fields are dropped from the schema, <em>silently</em>;</li>
+      <li>the recordset's per-field type and scale metadata is built from the filtered column list but indexed by DAO position, so every field after a dropped one is mis-scaled — silently, and only where the type is consulted (<code>Currency</code> and <code>Decimal</code>);</li>
+      <li>the row reader asks every DAO field for its value, so it meets the attachment field and emits an <code>unhandled variant type</code> warning per row.</li>
+    </ol>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Aspect</th>
+        <th>Python — all three</th>
+        <th>Rust port</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Skip complex types</td>
+        <td>Yes — <code>fld.Type &gt;= 101</code></td>
+        <td>Yes — <code>dao_type &lt; 101</code></td>
+      </tr>
+      <tr>
+        <td>Reported?</td>
+        <td><span class="badge badge-fix">Yes</span> INFO log naming the field and its type, always enabled</td>
+        <td><span class="badge badge-risk">No</span> a source comment only</td>
+      </tr>
+      <tr>
+        <td>Per-field type / scale metadata</td>
+        <td>None — conversion takes the value alone</td>
+        <td>Two vectors, indexed by DAO position</td>
+      </tr>
+      <tr>
+        <td>Metadata misalignment</td>
+        <td><span class="badge badge-fix">Not possible</span></td>
+        <td><span class="badge badge-risk">Present</span> latent mis-scaling</td>
+      </tr>
+      <tr>
+        <td>Reads the attachment's value</td>
+        <td>No — only the surviving columns are read</td>
+        <td>Yes — every DAO field, hence the per-row warning</td>
+      </tr>
+      <tr>
+        <td>If the recordset will not open</td>
+        <td>ERROR, console line, table skipped and recorded, run continues</td>
+        <td>Fatal — the run aborts</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>What the three replicators do</h2>
+
+  <h3>The skip, and the log that accompanies it</h3>
+  <p>All three carry the same block, in the schema-building loop over the table's fields — <code>pg_replicator.py:1777</code>, <code>my_replicator.py:1810</code>, <code>ms_replicator.py:1908</code>:</p>
+
+<pre><code># Skip complex field types (Attachment=101, MultiValue=102-109)
+# These cannot be accessed as scalar values from a table-type recordset
+if fld.Type &gt;= 101:
+    logger.info(f"  Skipping complex field '{decode_sketchy_utf16(fld.Name)}' (type {fld.Type}) in table {table_name}")
+    continue</code></pre>
+
+  <p>The column is then absent from <code>table_info['columns']</code>, so it is absent from the DDL, from the <code>INSERT</code> column list and from the update-set — exactly as in the port. What differs is the log line: it names the field and its type, and it is emitted at INFO.</p>
+
+  <h3>That log line is always visible</h3>
+  <p>This mattered enough to check rather than assume, because an INFO line that no handler accepts would be reporting in name only. In all three files the levels are set once at import and the run-time flags only ever <em>lower</em> the threshold:</p>
+
+<pre><code>logger.setLevel(logging.DEBUG)          # pg:31   my:31   ms:30
+file_handler.setLevel(logging.DEBUG)    # pg:39   my:39   ms:38
+console_handler.setLevel(logging.INFO)  # pg:48   my:48   ms:47
+
+# and at run time (pg:4182-4193) — nothing ever raises the level above these
+if args.debug:      logger.setLevel(logging.DEBUG); … StreamHandler → DEBUG
+elif args.trace:    logger.setLevel(logging.INFO)
+if args.verbose:    … StreamHandler → INFO</code></pre>
+
+  <p>So the skip message reaches the console handler (INFO ≥ INFO) and the file handler (DEBUG ≥ INFO) in every mode, with or without <code>--verbose</code>, <code>--debug</code> or <code>--trace</code>. Nothing suppresses it.</p>
+
+  <h3>The fallback when the table still will not open</h3>
+  <p>If skipping the field is not enough and <code>tdef.OpenRecordset()</code> fails, all three handle it explicitly (<code>pg_replicator.py:989-1003</code> and its counterparts):</p>
+
+<pre><code>except Exception as e:
+    logger.error(f"Failed to open recordset for table {table_name}: {e}")
+    logger.error(f"This may be caused by complex field types (Attachments, MultiValue) in the table.")
+    logger.error(f"Skipping table {table_name}")
+    print(f"ERROR: Cannot open recordset for {table_name} - table contains unsupported complex fields. Skipping.")
+    self.validation_results[table_name] = { … 'error': str(e) }
+    return</code></pre>
+
+  <p>The table is skipped, <em>printed</em> to the console, and recorded as a validation failure with the underlying error — so the run ends with a report of what was left out rather than passing quietly.</p>
+
+  <h2>What the port does that the Python does not</h2>
+
+  <h3>The metadata misalignment cannot arise here</h3>
+  <p>The Rust defect exists because the port introduced two vectors — a per-field DAO type and a per-field decimal scale — built from the <em>filtered</em> column list and then indexed by <em>DAO</em> position. The Python has no such construct. Its copy loop iterates only the surviving columns and reads each value by its recorded position:</p>
+
+<pre><code>for col in table_info['columns']:                 # surviving columns only
+    pos = col['field_position']                   # original position in tdef.Fields
+    if pos &gt;= recordset.Fields.Count:
+        continue                                  # explicit bounds guard
+    dao_val = recordset.Fields[pos].value
+    py_val = convert_dao_value_to_python(dao_val)</code></pre>
+
+  <p>And the conversion itself is driven entirely by the value (<code>pg_replicator.py:99</code>, <code>my_replicator.py:99</code>, <code>ms_replicator.py:96</code>) — it takes no column, no type and no scale: GUID unwrapping, date/datetime duck-typing, pass-through for <code>Decimal</code>, <code>bool</code>, <code>int</code> and <code>float</code>, and <code>str()</code> for anything else. With no positional metadata to shift, the shift the Rust port suffers <strong>has no expression in this code</strong>.</p>
+
+  <div class="callout">
+    <strong>Why this matters beyond the one file.</strong> The Python <code>field_position</code> comment — "Original position in tdef.Fields for recordset indexing" — is the same design the port copied. The port faithfully reproduced the position mapping and then added a second, positional mechanism beside it; it is that addition, not the skip, that carries the risk.
+  </div>
+
+  <h3>The reader never touches the attachment</h3>
+  <p>Because the Python iterates the surviving columns, it never asks the attachment field for a value — so there is no equivalent of the port's per-row <code>WARNING: unhandled variant type</code>. The Rust reader loops over every DAO field (<code>0..field_count</code>), meets the dispatch-valued attachment field, and reports it once per row. Reading fewer fields is also cheaper: the Python does not pay for a value it has already decided to drop.</p>
+
+  <h2>Verdict, part by part</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Part of the port's defect</th>
+        <th>Present in the three Python replicators?</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Complex-type fields dropped from the schema</td>
+        <td><span class="badge badge-fix">Yes — by design</span> a deliberate skip with a written reason, not a defect</td>
+      </tr>
+      <tr>
+        <td>… dropped <em>silently</em></td>
+        <td><span class="badge badge-fix">No</span> logged at INFO with the field name and type, always visible</td>
+      </tr>
+      <tr>
+        <td>Per-field metadata misaligned by the drop</td>
+        <td><span class="badge badge-fix">No</span> no per-field metadata vector exists to misalign</td>
+      </tr>
+      <tr>
+        <td>Attachment value read on every row</td>
+        <td><span class="badge badge-fix">No</span> only surviving columns are read</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <p>The honest form of the answer is therefore not "the Python is clean and the port is broken", but: <strong>the port inherited the skip, kept its reason in a comment, and lost everything that made the skip safe to live with</strong> — the log line, the table-level fallback, and a conversion path that never needed column metadata in the first place.</p>
+
+  <h2>Evidence</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>File:line</th>
+        <th>What it establishes</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr><td><code>pg_replicator.py:1779</code><br><code>my_replicator.py:1812</code><br><code>ms_replicator.py:1910</code></td><td>The complex-type skip, with its comment and its INFO log line.</td></tr>
+      <tr><td><code>pg_replicator.py:1790</code></td><td><code>field_position</code> recorded against the original <code>tdef.Fields</code> index.</td></tr>
+      <tr><td><code>pg_replicator.py:1017-1036</code><br><code>my_replicator.py:1016-1035</code><br><code>ms_replicator.py:999-1018</code></td><td>The copy loop: surviving columns only, value read by <code>field_position</code>, generic conversion.</td></tr>
+      <tr><td><code>pg_replicator.py:99</code><br><code>my_replicator.py:99</code><br><code>ms_replicator.py:96</code></td><td><code>convert_dao_value_to_python(value)</code> — the value is the only input; no type, no scale.</td></tr>
+      <tr><td><code>pg_replicator.py:31,39,48</code><br><code>my_replicator.py:31,39,48</code><br><code>ms_replicator.py:30,38,47</code></td><td>Logger at DEBUG, file handler at DEBUG, console handler at INFO — so an INFO skip line is always emitted.</td></tr>
+      <tr><td><code>pg_replicator.py:4182-4193</code></td><td>The run-time level flags only lower the threshold; none raises it.</td></tr>
+      <tr><td><code>pg_replicator.py:989-1003</code> (and the two counterparts)</td><td>The recordset-open failure path: ERROR, console line, validation record, table skipped, run continues.</td></tr>
+      <tr><td><code>schema/src/lib.rs:351</code><br><code>replicate/src/engine.rs:912-915</code><br><code>dao/src/recordset.rs:384-387</code><br><code>dao/src/recordset.rs:337-341</code></td><td>The Rust port, for comparison: the silent filter, the two metadata vectors, the DAO-positioned indexing, and the per-row warning. <em>In <code>msaccess-replicator-ng</code>.</em></td></tr>
+    </tbody>
+  </table>
+
+  <h2>What is not established</h2>
+  <ul>
+    <li><strong>No replicator was run.</strong> Every finding above comes from reading the source. The skip message's presence in a log file, and the absence of any mis-scaling on real data, are unverified at run time.</li>
+    <li><strong>No log file was read.</strong> <code>pg_replicator.log</code>, <code>my_replicator.log</code> and <code>ms_replicator.log</code> exist at the repository root and would confirm the skip message at run time; they were not opened. If confirmation is wanted, name one and it can be checked.</li>
+    <li><strong>The project's own fixtures were not opened.</strong> Whether <code>Test.accdb</code>, <code>Test2.accdb</code> or <code>TestHarness.accdb</code> contains an Attachment field — and therefore whether the skip path is exercised by the existing tests — would need a DAO run against a fixture, which is a Windows-side action.</li>
+    <li><strong>The Python skip's completeness was not exhaustively audited.</strong> This document checks the schema build and the row copy. Other traversals of <code>tdef.Fields</code> (index discovery, key detection) were not swept for a complex-type field.</li>
+  </ul>
+
+  <h2>Recommended action</h2>
+  <p><strong>None for these three replicators.</strong> Their handling of DAO type 101 is deliberate, documented in a source comment, and reported to the operator. The defect belongs to the port, and the corrections there — align the metadata vectors, report the skip, decide the complex-type policy openly — are recorded in the port's own investigation, <code>msaccess-replicator-ng/docs/DAO-datatype-bug-2026-10-07.html</code>.</p>
+
+  <div class="callout">
+    <strong>Status: investigation only.</strong> No file under <code>src/</code> was modified. This document is a record of a source reading, not of a change.
+  </div>
+
+</div>
+
+<footer>
+  &copy; 2026 Ron O'Hara. All rights reserved. &middot; DAO type 101 investigation, 2026-10-07<br>
+  <a href="mailto:webmaster@sentuny.com">webmaster@sentuny.com</a>
+</footer>
+
+</body>
+</html>

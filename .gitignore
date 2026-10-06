@@ -53,6 +53,7 @@ AGENTS.md
 *.laccdb
 config.local.py
 .env
+.codewhale/
 
 # Testing
 .pytest_cache/
