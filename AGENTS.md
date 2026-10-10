@@ -286,6 +286,19 @@ Read the most recently **modified** `context-transfer-*.md` file in the project 
 
 If the context-transfer file records a `Session Log` path, you may retrieve targeted context from it: keyword-search the log (a JSON transcript in `~/.codewhale/sessions/`) for the topics named in the transfer file's In Progress and Next step sections, and read only the matching messages — typically a handful. Do not read the whole log: it is a raw archive, the transfer file is the curated layer, and the log's value is the reasoning behind the decisions the transfer file states. This step is optional and bounded — targeted reads, not wholesale ingestion.
 
+### "get context"
+Same as "new session" above, except the most recently modified
+`context-transfer-*.md` file is read from `/home/rono/Documents/context-transfers`
+(`ls -lt /home/rono/Documents/context-transfers/context-transfer-*.md | head -1`)
+instead of the current repo's project root. Everything else is identical: re-read this
+AGENTS.md and confirm the rules in it, then read these files in full, from disk — a partial
+read is not a read, and a truncated read must never be silently accepted:
+
+`~/.codewhale/memory.md` (session memory — declarative facts and preferences)
+`~/.codewhale/notes.txt` (workflow lessons and user corrections)
+
+The orientation report is the sole deliverable of the turn.
+
 ### "generate context transfer" / "save session"
 Generate a context-transfer file at the project root: `context-transfer-YYYY-MM-DD-hh:mm:ss.md`. This file is written for an LLM reading it via "new session" — it must be explicit enough that a fresh session can resume work without reverse-engineering intent from file lists or commit logs.
 
@@ -332,6 +345,14 @@ Also include:
 - Verification state: what passes (build, backend health, DB accessible)
 
 The file is formatted as structured markdown. Filename includes date and time for uniqueness.
+
+### "save context"
+Same as "save session" above, except the transfer file is written to
+`/home/rono/Documents/context-transfers/context-transfer-YYYY-MM-DD-hh:mm:ss.md`
+instead of the current repo's project root. Everything else is identical: the Compaction Relay
+template, the required `Session Log` path (`ls -t ~/.codewhale/sessions/*.json | head -1` at
+save time), the project overview, recent commits, `git status --short`, and the verification
+state. Create the `context-transfers` directory if it does not exist.
 
 ### "web stub <language>"
 Create a stub language tree in `/home/rono/Documents/workbench-documents/website/`. The user may say the language name (e.g., "Belarusian") or provide the ISO 639-1 code (e.g., "be"). Look up the two-letter code and native name.
