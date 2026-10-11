@@ -66,7 +66,7 @@ The same workflow applies to feature requests, design questions, and any work th
 
 **Rule — Proposal/Implementation Separation**: Proposals and implementations must be in separate turns. If you have not yet received explicit approval for a plan, do not include code edits in the same turn as the proposal. Describe the fix, ask for approval, and only implement after approval is granted. This forces the stop at the turn boundary — you cannot propose and implement in one breath.
 
-**Rule**: Any database schema change — including Prisma schema modifications, new models, new fields, migrations, column renames, or type changes — requires explicit confirmation from the user before writing or executing. Present the proposed change, explain what it does, and wait for approval. Never run `prisma migrate`, `prisma db push`, or `prisma generate` without explicit user confirmation.
+**Rule**: Any database schema change — including new models, new fields, migrations, column renames, or type changes — requires explicit confirmation from the user before writing or executing. Present the proposed change, explain what it does, and wait for approval.
 
 **Rule — Pre-Commit Verification**: After making changes on x360, verify before committing. For backend: restart uvicorn (ask the user if remote) and hit the affected endpoint with curl to confirm the expected status code. For frontend: run `pnpm build` — never use `tsc` for frontend verification; `pnpm build` catches issues `tsc` misses. A change that compiles but hasn't been tested is not ready to commit. If you cannot test (backend not running, no auth token, no browser access), state that explicitly and let the user decide whether to commit untested.
 
@@ -256,10 +256,10 @@ curl -s -o /dev/null -w 'Frontend: HTTP %{http_code}\n' http://localhost:3000/
 "
 ```
 
-**When NOT to use:** if the change includes new npm dependencies (`pnpm install` needed), Prisma schema changes, backend code, environment variable changes, or translation updates. Those require additional steps from the full deployment plan.
+**When NOT to use:** if the change includes new npm dependencies (`pnpm install` needed), backend code, environment variable changes, or translation updates. Those require additional steps from the full deployment plan.
 
 #### "deploy simple backend fix"
-Deploy backend-only Python changes that do not involve new dependencies, database migrations, Prisma schema changes, or frontend code changes. Pushes main to GitHub, then SSHs into a514 to pull, restart the backend service, and verify.
+Deploy backend-only Python changes that do not involve new dependencies, database migrations, or frontend code changes. Pushes main to GitHub, then SSHs into a514 to pull, restart the backend service, and verify.
 
 ```bash
 # 1. Push to GitHub (local)
@@ -279,7 +279,7 @@ curl -s -o /dev/null -w 'Backend: HTTP %{http_code}\n' http://localhost:8000/api
 "
 ```
 
-**When NOT to use:** if the change includes new Python dependencies (`pip install` needed), Prisma schema changes, frontend code, environment variable changes, or translation updates. Those require additional steps from the full deployment plan.
+**When NOT to use:** if the change includes new Python dependencies (`pip install` needed), frontend code, environment variable changes, or translation updates. Those require additional steps from the full deployment plan.
 
 ### "new session"
 Read the most recently **modified** `context-transfer-*.md` file in the project root — determined by `ls -lt context-transfer-*.md | head -1`, not by filename timestamp. Context transfers can be updated after creation, so the filename date is not a reliable indicator of recency. After reading the correct file, orient yourself. Read this AGENTS.md again and confirm the rules in it. Also read `~/.codewhale/memory.md` (session memory — declarative facts and preferences) and `~/.codewhale/notes.txt` (workflow lessons and user corrections).
@@ -339,7 +339,7 @@ Structure the file using the Compaction Relay template:
 ```
 
 Also include:
-- Project overview: stack, key paths, Prisma models (one paragraph)
+- Project overview: stack, key paths, data models (one paragraph)
 - Recent commits since the last context transfer (table: hash, subject, date)
 - Current git status (`git status --short` output)
 - Verification state: what passes (build, backend health, DB accessible)
@@ -369,6 +369,6 @@ Create a stub language tree in `/home/rono/Documents/workbench-documents/website
 Report all the stored command names and their associated actions from this AGENTS.md file, formatted as HTML, and write the output to `/home/rono/Documents/workbench-documents/codewhale-stored-commands.html`.
 <!-- END:translation-processes -->
 
-**Rule — SQL Transactions**: Every database write that touches more than one row or more than one table MUST use a transaction. Python: wrap in `async with conn.transaction():`. TypeScript/Prisma: wrap in `prisma.$transaction([...])` or interactive `prisma.$transaction(async (tx) => {...})`. Single-statement operations are exempt. Application-level rollback (manual delete/update to undo an earlier write) is never acceptable — use ROLLBACK.
+**Rule — SQL Transactions**: Every database write that touches more than one row or more than one table MUST use a transaction. Python: wrap in `async with conn.transaction():`. Single-statement operations are exempt. Application-level rollback (manual delete/update to undo an earlier write) is never acceptable — use ROLLBACK.
 
 **Rule — Validate, Don't Suppress**: Actions are never disabled (greyed out) to prevent user mistakes. Instead, buttons remain enabled at all times; validation runs on click and failures produce clear, persistent error messages inline. The user should always be able to attempt an action and receive specific feedback about what went wrong, rather than being blocked from trying. A disabled button gives the user no information about what's required; an enabled button with validation gives them a path forward.
